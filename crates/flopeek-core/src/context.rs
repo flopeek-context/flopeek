@@ -67,7 +67,37 @@ pub fn for_snapshot(
                 ],
             )
             .map_err(|error| format!("Unable to persist Context Ref: {error}"))?;
-        refs.push(reference);
+        let canonical = resolve(transaction, &reference.uri, &snapshot.project_id)?;
+        let current_basis_matches = canonical.current_basis.as_ref().is_some_and(|basis| {
+            basis.project_id == snapshot.project_id
+                && basis.graph_id == snapshot.graph_id
+                && basis.graph_version == snapshot.graph_version
+                && basis.observation_id == snapshot.observation_id
+        });
+        let origin_basis_matches = canonical.origin_basis.as_ref().is_some_and(|basis| {
+            basis.project_id == canonical.project_id
+                && basis.graph_id == canonical.graph_id
+                && basis.graph_version == canonical.graph_version
+                && basis.observation_id == canonical.origin_observation_id
+        });
+        let canonical_status_is_valid = matches!(
+            canonical.status.as_str(),
+            "current" | "stale" | "unresolved"
+        );
+        let canonical_identity_matches = canonical.project_id == reference.project_id
+            && canonical.graph_id == reference.graph_id
+            && canonical.graph_version == reference.graph_version
+            && canonical.node_id == reference.node_id
+            && canonical_status_is_valid
+            && current_basis_matches
+            && (canonical.status == "unresolved" || origin_basis_matches);
+        if !canonical_identity_matches {
+            return Err(format!(
+                "Persisted Context Ref {} does not match the current graph observation.",
+                reference.uri
+            ));
+        }
+        refs.push(canonical);
     }
     refs.sort_by(|left, right| left.uri.cmp(&right.uri));
     Ok(refs)
@@ -180,6 +210,7 @@ pub fn resolve(
             current_version,
             current_graph_id,
         )) => {
+            let same_observation = current_observation_id == origin_observation_id;
             let current_basis = Some(GraphBasis {
                 project_id: project_id.to_string(),
                 graph_id: current_graph_id,
@@ -224,7 +255,11 @@ pub fn resolve(
                     ("stale", "legacy file evidence changed")
                 }
             } else if current_fingerprint == Some(origin_fingerprint.as_str()) {
-                ("current", "node AST and direct-edge fingerprint matches")
+                if same_observation {
+                    ("current", "origin-observation-current")
+                } else {
+                    ("current", "node AST and direct-edge fingerprint matches")
+                }
             } else {
                 ("stale", "node AST or direct-edge fingerprint changed")
             };

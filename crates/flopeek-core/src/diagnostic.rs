@@ -11,6 +11,7 @@ use crate::model::{
     HistoricalCandidate, HistoricalDiagnosis, HistoricalSnapshot,
 };
 use crate::store;
+use crate::typescript::PARSER_IDENTITY;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -21,7 +22,6 @@ const MAX_ID_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_LIST_ITEMS: usize = 256;
 const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v2";
-const HISTORY_PARSER_ID: &str = "tree-sitter-typescript-0.23.2";
 
 const ALLOWED_INTENTS: &[&str] = &["diagnose", "audit", "verify-fix"];
 const ALLOWED_CONTEXT_STATUSES: &[&str] = &["open", "reconciled", "resolved", "superseded"];
@@ -694,7 +694,7 @@ fn load_or_build_historical_snapshot(
     cache: &mut BTreeMap<String, HistoricalSnapshot>,
 ) -> Result<HistoricalSnapshot, String> {
     let cache_key = format!(
-        "{revision}\0{HISTORY_DERIVATION_ID}\0{HISTORY_PARSER_ID}\0{}\0{}",
+        "{revision}\0{HISTORY_DERIVATION_ID}\0{PARSER_IDENTITY}\0{}\0{}",
         limits.max_paths, limits.max_snapshot_bytes
     );
     if let Some(snapshot) = cache.get(&cache_key) {
@@ -704,7 +704,7 @@ fn load_or_build_historical_snapshot(
         root,
         revision,
         HISTORY_DERIVATION_ID,
-        HISTORY_PARSER_ID,
+        PARSER_IDENTITY,
         limits.max_paths,
         limits.max_snapshot_bytes,
     )? {
@@ -716,7 +716,7 @@ fn load_or_build_historical_snapshot(
         root,
         &snapshot,
         HISTORY_DERIVATION_ID,
-        HISTORY_PARSER_ID,
+        PARSER_IDENTITY,
         limits.max_paths,
         limits.max_snapshot_bytes,
     )?;

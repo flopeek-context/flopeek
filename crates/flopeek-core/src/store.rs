@@ -1452,6 +1452,18 @@ mod tests {
         git(&root, &["commit", "-m", "source A"]);
         let (snapshot, facts) = graph::build(&root).expect("build A");
         let first = persist_scan(&root, snapshot, &facts).expect("scan A");
+        let first_ref = first.context_refs[0].clone();
+        let first_resolved = resolve_context(&root, &first_ref.uri).expect("resolve first ref");
+        assert_eq!(first_ref, first_resolved);
+        assert_eq!(first_ref.origin_observation_id, first.graph.observation_id);
+        assert_eq!(
+            first_ref
+                .current_basis
+                .as_ref()
+                .expect("first current basis")
+                .observation_id,
+            first.graph.observation_id
+        );
         fs::write(root.join("README.md"), "documentation-only change\n").expect("README");
         git(&root, &["add", "README.md"]);
         git(&root, &["commit", "-m", "README only"]);
@@ -1459,6 +1471,30 @@ mod tests {
         let second = persist_scan(&root, snapshot, &facts).expect("scan README");
         assert_eq!(first.graph.graph_id, second.graph.graph_id);
         assert_eq!(first.graph.graph_version, second.graph.graph_version);
+        assert_ne!(first.graph.observation_id, second.graph.observation_id);
+        let second_ref = second
+            .context_refs
+            .iter()
+            .find(|reference| reference.uri == first_ref.uri)
+            .expect("same Context Ref URI");
+        assert_eq!(second_ref.origin_observation_id, first.graph.observation_id);
+        assert_eq!(
+            second_ref
+                .current_basis
+                .as_ref()
+                .expect("second current basis")
+                .observation_id,
+            second.graph.observation_id
+        );
+        assert_eq!(second_ref.status, "current");
+        assert_eq!(
+            second_ref.freshness_reason,
+            "node AST and direct-edge fingerprint matches"
+        );
+        assert_eq!(
+            second_ref,
+            &resolve_context(&root, &second_ref.uri).expect("resolve canonical second ref")
+        );
         let connection = open(&root).expect("open");
         assert_eq!(
             connection
@@ -1467,7 +1503,6 @@ mod tests {
                 .expect("observations"),
             2
         );
-        assert_ne!(first.graph.observation_id, second.graph.observation_id);
         let manifest = connection
             .query_row(
                 "SELECT source_manifest_json FROM graph_observations ORDER BY observed_at LIMIT 1",
@@ -1546,6 +1581,17 @@ mod tests {
         assert_eq!(
             resolve_context(&root, &reference.uri)
                 .expect("resolve unresolved")
+                .status,
+            "unresolved"
+        );
+        let (snapshot, facts) = graph::build(&root).expect("rebuild legacy graph");
+        let rescanned = persist_scan(&root, snapshot, &facts).expect("persist unresolved legacy");
+        assert_eq!(
+            rescanned
+                .context_refs
+                .iter()
+                .find(|candidate| candidate.uri == reference.uri)
+                .expect("legacy Context Ref after rescan")
                 .status,
             "unresolved"
         );
