@@ -1771,6 +1771,110 @@ mod tests {
     }
 
     #[test]
+    fn flow_focused_history_and_packet_keep_exact_evidence_and_candidate_language() {
+        let root = fixture_root();
+        fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"start":"tsx src/main.ts"}}"#,
+        )
+        .expect("package A");
+        fs::write(
+            root.join("src/main.ts"),
+            "export function main() { return 'source-body-sentinel'; }\n",
+        )
+        .expect("main A");
+        fs::create_dir_all(root.join("tests")).expect("tests directory");
+        fs::write(
+            root.join("tests/main.test.ts"),
+            "import { main } from '../src/main'; main();\n",
+        )
+        .expect("test A");
+        let a = commit(&root, "A: stable package entry");
+        fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"start":"tsx src/other.ts"}}"#,
+        )
+        .expect("package B");
+        fs::write(
+            root.join("src/other.ts"),
+            "export function other() { return 'changed-source-body-sentinel'; }\n",
+        )
+        .expect("other B");
+        let b = commit(&root, "B: change static entry target");
+
+        let (snapshot, facts) = graph::build(&root).expect("build current");
+        let result = store::persist_scan(&root, snapshot, &facts).expect("persist current");
+        let flow_ref = result.flow_refs.first().expect("flow ref").uri.clone();
+        let node_ref = result.context_refs.first().expect("node ref").uri.clone();
+        let context = DiagnosticContext {
+            schema_version: DIAGNOSTIC_CONTEXT_SCHEMA.to_string(),
+            id: "flow-focused-context".to_string(),
+            project_id: result.project_id,
+            revision: 0,
+            intent: "diagnose".to_string(),
+            symptom: "the static entry target changed".to_string(),
+            expected_behavior: "the declared entry remains stable".to_string(),
+            focus_context_refs: vec![node_ref],
+            focus_flow_refs: vec![flow_ref.clone()],
+            current_graph_basis: graph_basis(&result.graph),
+            last_known_good_basis: Some(GitBasis {
+                revision: a.clone(),
+            }),
+            constraints: vec!["Static evidence only".to_string()],
+            acceptance_criteria: vec!["Candidates remain non-causal".to_string()],
+            unresolved_questions: vec!["Was the entry invoked?".to_string()],
+            actor: "test-agent".to_string(),
+            created_at: 0,
+            status: "open".to_string(),
+            supersedes: None,
+        };
+        let context = store::create_diagnostic_context(&root, context).expect("context");
+        let diagnosis = diagnose_history(&root, &context.id, DiagnosticLimits::default())
+            .expect("flow diagnosis");
+        let candidate = diagnosis
+            .candidates
+            .iter()
+            .find(|candidate| candidate.commit == b)
+            .expect("entry candidate");
+        assert!(
+            candidate
+                .relevance_reasons
+                .iter()
+                .any(|reason| reason == "focused-flow-changed")
+        );
+        assert!(
+            candidate
+                .relevance_reasons
+                .iter()
+                .any(|reason| reason == "focused-entry-changed")
+        );
+        assert!(
+            candidate
+                .relevance_reasons
+                .iter()
+                .all(|reason| reason != "root-cause")
+        );
+        assert_eq!(diagnosis.last_known_good_basis.unwrap().revision, a);
+
+        let packet = build_packet(&root, &context.id, DiagnosticLimits::default()).expect("packet");
+        assert_eq!(packet.focus_flow_refs.len(), 1);
+        assert_eq!(packet.focus_flow_refs[0].status, "current");
+        assert_eq!(packet.focus_flows.len(), 1);
+        assert!(
+            packet
+                .historical
+                .candidates
+                .iter()
+                .any(|candidate| candidate.commit == b)
+        );
+        let packet_json = serde_json::to_string(&packet).expect("packet json");
+        assert!(!packet_json.contains("source-body-sentinel"));
+        assert!(!packet_json.contains("changed-source-body-sentinel"));
+        assert!(!packet_json.contains(root.to_string_lossy().as_ref()));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn assertion_lifecycle_is_versioned_and_evidence_classes_stay_separate() {
         let root = fixture_root();
         fs::write(root.join("src/main.ts"), "export const main = 1;\n").expect("source");

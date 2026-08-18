@@ -1820,6 +1820,80 @@ mod tests {
         root
     }
 
+    fn flow_fixture_root() -> PathBuf {
+        let root = fixture_root();
+        fs::write(
+            root.join("package.json"),
+            r#"{
+                "scripts": {
+                    "start": "tsx src/main.ts",
+                    "unsupported": "tsx src/main.ts && echo credential-sentinel"
+                },
+                "bin": {"checkout": "src/main.ts"},
+                "main": "src/main",
+                "module": "src/main.ts"
+            }"#,
+        )
+        .expect("package manifest");
+        fs::write(
+            root.join("src/main.ts"),
+            "export function main() { helper(); }\nfunction helper() { return 'source-body-sentinel'; }\nmain();\n",
+        )
+        .expect("main source");
+        fs::create_dir_all(root.join("tests")).expect("tests");
+        fs::write(
+            root.join("tests/main.test.ts"),
+            "import { main } from '../src/main'; main();\n",
+        )
+        .expect("test source");
+        root
+    }
+
+    fn schema_snapshot(connection: &rusqlite::Connection) -> Vec<(String, String, String)> {
+        connection
+            .prepare(
+                "SELECT type, name, COALESCE(sql, '') FROM sqlite_master
+                 WHERE name NOT LIKE 'sqlite_%' AND type IN ('table', 'index')
+                 ORDER BY type, name",
+            )
+            .expect("schema query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .expect("schema rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("schema snapshot")
+    }
+
+    fn initialize_v5_database(root: &Path) {
+        fs::create_dir_all(root.join(STORE_DIRECTORY)).expect("store directory");
+        let mut connection = rusqlite::Connection::open(database_path(root)).expect("sqlite");
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("foreign keys");
+        for target in 1..=5 {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .expect("migration transaction");
+            match target {
+                1 => migration_v1(&transaction).expect("v1"),
+                2 => migration_v2(&transaction).expect("v2"),
+                3 => migration_v3(&transaction).expect("v3"),
+                4 => migration_v4(&transaction).expect("v4"),
+                5 => migration_v5(&transaction).expect("v5"),
+                _ => unreachable!(),
+            }
+            transaction
+                .execute_batch(&format!("PRAGMA user_version = {target};"))
+                .expect("version");
+            transaction.commit().expect("migration commit");
+        }
+    }
+
     fn git(root: &Path, args: &[&str]) {
         let output = Command::new("git")
             .arg("-C")
@@ -2384,6 +2458,349 @@ mod tests {
         );
         drop(connection);
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn flow_ref_round_trip_is_canonical_and_origin_is_immutable() {
+        let root = flow_fixture_root();
+        let (snapshot, facts) = graph::build(&root).expect("build");
+        let first = persist_scan(&root, snapshot, &facts).expect("first persist");
+        assert!(!first.flow_refs.is_empty());
+        let first_ref = first.flow_refs[0].clone();
+        assert_eq!(first_ref.status, "current");
+        assert_eq!(first_ref.freshness_reason, "origin-observation-current");
+        assert_eq!(first_ref.origin_observation_id, first.graph.observation_id);
+        assert_eq!(
+            first_ref
+                .current_basis
+                .as_ref()
+                .map(|basis| &basis.observation_id),
+            Some(&first.graph.observation_id)
+        );
+        assert_eq!(
+            resolve_flow(&root, &first_ref.uri).expect("resolve"),
+            first_ref
+        );
+
+        fs::write(
+            root.join("package.json"),
+            "{\n  \"scripts\": {\"start\": \"tsx src/main.ts\", \"unsupported\": \"tsx src/main.ts && echo credential-sentinel\"},\n  \"bin\": {\"checkout\": \"src/main.ts\"},\n  \"main\": \"src/main\",\n  \"module\": \"src/main.ts\"\n}\n",
+        )
+        .expect("format package");
+        let (snapshot, facts) = graph::build(&root).expect("second build");
+        let second = persist_scan(&root, snapshot, &facts).expect("second persist");
+        assert_eq!(second.graph.graph_id, first.graph.graph_id);
+        assert_eq!(second.graph.graph_version, first.graph.graph_version);
+        assert_ne!(second.graph.observation_id, first.graph.observation_id);
+        let second_ref = second
+            .flow_refs
+            .iter()
+            .find(|reference| reference.uri == first_ref.uri)
+            .expect("same flow ref");
+        assert_eq!(
+            second_ref.origin_observation_id,
+            first_ref.origin_observation_id
+        );
+        assert_eq!(second_ref.status, "current");
+        assert_eq!(second_ref.freshness_reason, "flow-fingerprint-match");
+        assert_eq!(
+            second_ref
+                .current_basis
+                .as_ref()
+                .map(|basis| &basis.observation_id),
+            Some(&second.graph.observation_id)
+        );
+        assert_eq!(
+            resolve_flow(&root, &first_ref.uri).expect("resolve second"),
+            *second_ref
+        );
+
+        fs::write(
+            root.join("package.json"),
+            "{\"scripts\":{\"start\":\"tsx src/other.ts\",\"unsupported\":\"tsx src/main.ts && echo credential-sentinel\"},\"bin\":{\"checkout\":\"src/main.ts\"},\"main\":\"src/main\",\"module\":\"src/main.ts\"}",
+        )
+        .expect("changed entry target");
+        fs::write(
+            root.join("src/other.ts"),
+            "export function other() { return 'other'; }\n",
+        )
+        .expect("other target");
+        let (snapshot, facts) = graph::build(&root).expect("third build");
+        let third = persist_scan(&root, snapshot, &facts).expect("third persist");
+        let stale = resolve_flow(&root, &first_ref.uri).expect("stale flow");
+        assert_eq!(stale.status, "stale");
+        assert_eq!(stale.freshness_reason, "flow-fingerprint-changed");
+        assert_eq!(stale.origin_observation_id, first_ref.origin_observation_id);
+        assert_eq!(
+            stale
+                .current_basis
+                .as_ref()
+                .map(|basis| &basis.observation_id),
+            Some(&third.graph.observation_id)
+        );
+        let connection = open(&root).expect("open");
+        let payloads = connection
+            .prepare("SELECT payload_json FROM graph_flows UNION ALL SELECT entry_json FROM graph_flow_evidence")
+            .expect("flow payloads")
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("flow rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("flow payload values")
+            .join("\n");
+        assert!(!payloads.contains("credential-sentinel"));
+        assert!(!payloads.contains("source-body-sentinel"));
+        assert!(!payloads.contains(root.to_string_lossy().as_ref()));
+        drop(connection);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn flow_ref_reports_missing_identity_and_wrong_project_explicitly() {
+        let root = flow_fixture_root();
+        let (snapshot, facts) = graph::build(&root).expect("build");
+        let first = persist_scan(&root, snapshot, &facts).expect("persist");
+        let reference = first.flow_refs.first().expect("flow ref").clone();
+        let connection = open(&root).expect("open");
+        let wrong_uri = flow_ref::uri("different-project", &reference.graph_id, &reference.flow_id);
+        let wrong =
+            flow_ref::resolve(&connection, &wrong_uri, &first.project_id).expect("wrong project");
+        assert_eq!(wrong.status, "wrong-project");
+        drop(connection);
+        let connection = open(&root).expect("open again");
+        connection
+            .execute(
+                "DELETE FROM graph_flows WHERE graph_version = ?1 AND flow_id = ?2",
+                params![first.graph.graph_version as i64, reference.flow_id],
+            )
+            .expect("remove current flow");
+        drop(connection);
+        let stale = resolve_flow(&root, &reference.uri).expect("stale resolve");
+        assert_eq!(stale.status, "stale");
+        assert_eq!(stale.freshness_reason, "flow-identity-missing");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn flow_ref_remains_current_for_unrelated_source_but_tracks_related_test_changes() {
+        let root = flow_fixture_root();
+        let (snapshot, facts) = graph::build(&root).expect("build");
+        let first = persist_scan(&root, snapshot, &facts).expect("persist");
+        let reference = first.flow_refs.first().expect("flow ref").clone();
+        assert!(!first.graph.flows[0].related_tests.is_empty());
+
+        fs::write(
+            root.join("src/unrelated.ts"),
+            "export const unrelated = 'unrelated';\n",
+        )
+        .expect("unrelated source");
+        let (snapshot, facts) = graph::build(&root).expect("unrelated build");
+        let unrelated = persist_scan(&root, snapshot, &facts).expect("unrelated persist");
+        let current = resolve_flow(&root, &reference.uri).expect("current flow");
+        assert_eq!(current.status, "current");
+        assert_eq!(current.freshness_reason, "flow-fingerprint-match");
+        assert_eq!(
+            current.origin_observation_id,
+            reference.origin_observation_id
+        );
+        assert_ne!(unrelated.graph.observation_id, first.graph.observation_id);
+
+        fs::write(
+            root.join("tests/main.test.ts"),
+            "export const unrelatedTest = true;\n",
+        )
+        .expect("related test change");
+        let (snapshot, facts) = graph::build(&root).expect("test change build");
+        let changed = persist_scan(&root, snapshot, &facts).expect("test change persist");
+        let stale = resolve_flow(&root, &reference.uri).expect("related test stale");
+        assert_eq!(stale.status, "stale");
+        assert_eq!(stale.freshness_reason, "flow-fingerprint-changed");
+        assert_eq!(stale.origin_observation_id, reference.origin_observation_id);
+        assert_eq!(
+            stale
+                .current_basis
+                .as_ref()
+                .map(|basis| &basis.observation_id),
+            Some(&changed.graph.observation_id)
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn corrupted_flow_ref_metadata_rolls_back_the_entire_scan() {
+        let root = flow_fixture_root();
+        let (snapshot, facts) = graph::build(&root).expect("build");
+        let first = persist_scan(&root, snapshot, &facts).expect("persist");
+        let reference = first.flow_refs.first().expect("flow ref").clone();
+        let connection = open(&root).expect("open");
+        connection
+            .execute(
+                "UPDATE flow_refs SET origin_fingerprint = 'corrupted' WHERE uri = ?1",
+                params![reference.uri],
+            )
+            .expect("corrupt flow ref");
+        drop(connection);
+        fs::write(
+            root.join("package.json"),
+            "{\n  \"scripts\": {\"start\": \"tsx src/main.ts\", \"unsupported\": \"tsx src/main.ts && echo credential-sentinel\"},\n  \"bin\": {\"checkout\": \"src/main.ts\"},\n  \"main\": \"src/main\",\n  \"module\": \"src/main.ts\"\n}\n",
+        )
+        .expect("format package");
+        let (snapshot, facts) = graph::build(&root).expect("second build");
+        assert!(persist_scan(&root, snapshot, &facts).is_err());
+        let connection = open(&root).expect("reopen");
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM graph_observations", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("observations"),
+            1
+        );
+        assert_eq!(
+            status(&root).expect("status").current_graph_version,
+            Some(first.graph.graph_version)
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT origin_fingerprint FROM flow_refs WHERE uri = ?1",
+                    params![reference.uri],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("flow fingerprint"),
+            "corrupted"
+        );
+        drop(connection);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn fresh_and_upgraded_v6_schema_match_and_migration_failure_rolls_back() {
+        let fresh_root = fixture_root();
+        let fresh = open(&fresh_root).expect("fresh schema");
+        let fresh_schema = schema_snapshot(&fresh);
+        assert_eq!(
+            fresh
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .expect("fresh version"),
+            CURRENT_USER_VERSION
+        );
+        drop(fresh);
+
+        let upgraded_root = fixture_root();
+        initialize_v5_database(&upgraded_root);
+        let project_id = graph::project_id(&upgraded_root);
+        let connection = rusqlite::Connection::open(database_path(&upgraded_root)).expect("v5");
+        connection
+            .execute(
+                "INSERT INTO graph_versions(graph_version, graph_id, project_id, source_revision, created_at, truncated, omissions_json)
+                 VALUES(1, 'graph-v5', ?1, 'revision-v5', 1, 0, '[]')",
+                params![project_id],
+            )
+            .expect("graph row");
+        connection
+            .execute(
+                "INSERT INTO diagnostic_contexts(id, project_id, revision, payload_json, created_at)
+                 VALUES('context-v5', ?1, 1, '{\"contextSentinel\":\"keep\"}', 1)",
+                params![project_id],
+            )
+            .expect("context row");
+        connection
+            .execute(
+                "INSERT INTO diagnostic_assertions(id, context_id, revision, kind, status, actor, payload_json, created_at)
+                 VALUES('assertion-v5', 'context-v5', 1, 'observation', 'proposed', 'test', '{\"assertionSentinel\":\"keep\"}', 1)",
+                [],
+            )
+            .expect("assertion row");
+        drop(connection);
+        let upgraded = open(&upgraded_root).expect("upgrade schema");
+        assert_eq!(schema_snapshot(&upgraded), fresh_schema);
+        assert_eq!(
+            upgraded
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .expect("upgraded version"),
+            CURRENT_USER_VERSION
+        );
+        let migrated_context = upgraded
+            .query_row(
+                "SELECT payload_json FROM diagnostic_contexts WHERE id='context-v5'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("context payload");
+        assert!(migrated_context.contains("contextSentinel"));
+        assert!(migrated_context.contains(crate::model::DIAGNOSTIC_CONTEXT_SCHEMA));
+        assert!(migrated_context.contains("focusFlowRefs"));
+        assert_eq!(
+            upgraded
+                .query_row(
+                    "SELECT payload_json FROM diagnostic_assertions WHERE id='assertion-v5'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .expect("assertion payload"),
+            "{\"assertionSentinel\":\"keep\"}"
+        );
+        drop(upgraded);
+        fs::remove_dir_all(fresh_root).expect("cleanup fresh");
+        fs::remove_dir_all(upgraded_root).expect("cleanup upgraded");
+
+        let failed_root = fixture_root();
+        initialize_v5_database(&failed_root);
+        let connection =
+            rusqlite::Connection::open(database_path(&failed_root)).expect("failed v5");
+        connection
+            .execute(
+                "INSERT INTO diagnostic_contexts(id, project_id, revision, payload_json, created_at)
+                 VALUES('context-fail', ?1, 1, '{}', 1)",
+                params![graph::project_id(&failed_root)],
+            )
+            .expect("failure context");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_v6_context_update BEFORE UPDATE ON diagnostic_contexts
+                 BEGIN SELECT RAISE(ABORT, 'forced v6 migration failure'); END;",
+            )
+            .expect("failure trigger");
+        drop(connection);
+        assert!(open(&failed_root).is_err());
+        let connection =
+            rusqlite::Connection::open(database_path(&failed_root)).expect("reopen failed");
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .expect("failed version"),
+            5
+        );
+        let columns = table_columns_from_connection(&connection, "graph_observations");
+        assert!(
+            !columns
+                .iter()
+                .any(|column| column == "entry_manifest_status")
+        );
+        assert!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='flow_refs'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("flow table check")
+                == 0
+        );
+        drop(connection);
+        fs::remove_dir_all(failed_root).expect("cleanup failed");
+    }
+
+    fn table_columns_from_connection(
+        connection: &rusqlite::Connection,
+        table: &str,
+    ) -> Vec<String> {
+        connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .expect("table columns")
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("table column rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("table column values")
     }
 
     #[test]
