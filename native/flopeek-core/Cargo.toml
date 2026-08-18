@@ -10,7 +10,7 @@ description = "Flopeek strict Rust source, graph, query, and SQLite core."
 blake3 = "1.8.2"
 icu_collator = "=2.1.2"
 icu_locale_core = "=2.1.1"
-rusqlite = { version = "0.37.0", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value", "preserve_order"] }
