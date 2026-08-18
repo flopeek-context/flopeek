@@ -1061,6 +1061,10 @@ Do not restart foundation migration unless a concrete correctness defect require
 
 ### P1 — TypeScript Context Intelligence
 
+Status:
+
+**implemented; maturity gate passed**
+
 Strengthen evidence required for better repository context:
 
 - symbol identity;
@@ -1076,6 +1080,10 @@ Goal:
 > improve Context Ref quality, historical diagnosis, and reusable context.
 
 ### P2 — Temporal Context Intelligence
+
+Status:
+
+**active**
 
 Strengthen:
 
@@ -1225,7 +1233,52 @@ The fixture should prove:
 
 ---
 
-## 28. Branch and change policy
+## 28. Code structure and dependency policy
+
+The core must remain modular as capability grows. A module has one primary
+responsibility and a named domain boundary. Do not add new behavior to a god
+file merely because an existing file is convenient.
+
+Dependency direction is one-way:
+
+```text
+protocol / CLI
+      -> orchestration
+      -> domain evidence and temporal logic
+      -> persistence adapters
+```
+
+The following boundaries are mandatory:
+
+- Temporal, graph, and diagnostic domain logic must not depend on JSONL, SQLite,
+  filesystem, or Git adapters.
+- SQL belongs in the storage subsystem. Git command execution belongs in the
+  historical Git adapter.
+- `mod.rs` files are facades and re-export surfaces; they do not contain large
+  implementations.
+- Do not create catch-all `utils`, `helpers`, or `common` modules without a
+  specific domain responsibility.
+- A module should target at most 500 production lines. More than 700 production
+  lines is a blocker for review unless the file is declarative/generated and
+  the PR documents the exception.
+- Facades should target at most 200 production lines.
+- Functions longer than 100 lines must be decomposed or document the atomicity
+  or invariant that requires one function body.
+- Large tests must be split by behavior into sibling test modules or integration
+  tests; test volume must not conceal a production god file.
+- Every new cross-module dependency must state its owner, direction, and error
+  boundary in the PR description.
+
+These are review gates, not a line-count CI check. Existing oversized modules
+must be reduced when their subsystem is next changed. A refactor must preserve
+public paths through explicit facades and re-exports.
+
+Review every architectural change for responsibility, dependency direction,
+state ownership, error propagation, bounds, persistence authority, and tests.
+
+---
+
+## 29. Branch and change policy
 
 `main` is canonical and protected.
 
@@ -1254,7 +1307,7 @@ Especially avoid:
 
 ---
 
-## 29. Definition of done
+## 30. Definition of done
 
 A core capability is done only when:
 
@@ -1285,7 +1338,7 @@ A language-intelligence improvement is done only when it demonstrably improves a
 
 ---
 
-## 30. Agent safety rules
+## 31. Agent safety rules
 
 Agents must not:
 
@@ -1334,7 +1387,7 @@ root cause
 
 ---
 
-## 31. Agent response discipline
+## 32. Agent response discipline
 
 When implementing or auditing Flopeek, classify conclusions as:
 
@@ -1362,7 +1415,7 @@ Never collapse evidence classes into one narrative truth.
 
 ---
 
-## 32. Final invariants
+## 33. Final invariants
 
 ### Product identity
 
