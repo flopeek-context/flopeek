@@ -43,6 +43,20 @@ mod architecture_contract_tests {
     }
 
     #[test]
+    fn evidence_boundaries_keep_public_facades_and_derivation_identity() {
+        let _ = crate::module_resolution::ModuleResolver::load(std::path::Path::new("."));
+        assert!(crate::flow::flow_id("project", "script", "start").starts_with("flow_"));
+        assert_eq!(
+            crate::graph::GRAPH_DERIVATION_ID,
+            "typescript-structural-evidence-v6"
+        );
+        assert_eq!(
+            crate::module_resolution::MODULE_RESOLUTION_SCHEMA,
+            "flopeek-typescript-module-resolution/v1"
+        );
+    }
+
+    #[test]
     fn persistence_and_diagnostic_contract_paths_remain_stable() {
         assert_eq!(crate::store::CURRENT_USER_VERSION, 6);
         assert_eq!(crate::model::CONTEXT_REF_SCHEMA, "flopeek-context-ref/v2");
