@@ -11,9 +11,11 @@ proposals are different evidence classes.
 2. Add a deterministic fixture or a pinned, auditable external scope. Do not
    infer runtime execution or business intent from static topology.
 3. Keep repository/UI copy in English and state unsupported forms explicitly.
-4. Run the smallest relevant test first, then `npm test` for behavior changes.
-5. For package or release changes, also run `npm run test:package` and
-   `npm run test:public-source`.
+4. Run the smallest relevant Rust test first, then the workspace gates:
+   `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+   and `cargo test --workspace --all-targets --locked`.
+5. Keep new persisted authority in SQLite; JSON is for contracts, exports, and
+   fixtures only.
 
 ## Parser and graph changes
 

@@ -1,0 +1,23 @@
+[package]
+name = "flopeek-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+description = "Flopeek Rust source, graph, diagnostic, query, and SQLite core."
+default-run = "flopeek"
+
+[[bin]]
+name = "flopeek"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+blake3 = "1.8.2"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.149", features = ["raw_value", "preserve_order"] }
+tree-sitter = "0.25.10"
+tree-sitter-typescript = "0.23.2"

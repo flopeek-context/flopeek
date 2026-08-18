@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "flopeek-typescript-history-fixture/v1",
+  "versions": [
+    { "id": "A", "role": "last-known-good", "changedPaths": ["src/checkout.ts", "src/payment.ts"] },
+    { "id": "B", "role": "retry-introduced", "changedPaths": ["src/payment.ts"], "candidate": true },
+    { "id": "C", "role": "unrelated-change", "changedPaths": ["README.md"], "candidate": false },
+    { "id": "D", "role": "timeout-branch-changed", "changedPaths": ["src/payment.ts"], "candidate": true },
+    { "id": "E", "role": "current-bad-state", "changedPaths": ["src/payment.ts", "src/checkout.ts"] }
+  ],
+  "assertions": [
+    "Candidate changes are deterministic relevance signals only.",
+    "No version is labeled a runtime cause or root cause.",
+    "Runtime behavior and business intent remain unavailable without separate evidence."
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "flopeek-product-contract/v1",
+  "canonicalRepository": "flopeek-context/flopeek",
+  "coreImplementation": "rust",
+  "persistedAuthority": "sqlite",
+  "diagnosticMetadataAuthority": "sqlite",
+  "primaryAnalyzedLanguages": ["typescript", "tsx"],
+  "llmRequired": false,
+  "javascriptRepositoryAuthority": false,
+  "automaticRootCauseClaims": false,
+  "normalCi": [
+    "cargo fmt --all --check",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo test --workspace --all-targets --locked"
+  ]
+}
