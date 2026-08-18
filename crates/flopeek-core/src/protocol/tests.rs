@@ -63,6 +63,10 @@ fn jsonl_health_is_rust_only_and_deterministic() {
         response["result"]["automaticSupersession"],
         "exact-single-candidate-only"
     );
+    assert_eq!(
+        response["result"]["structuralChangeAttribution"],
+        "adjacent-observation-compatible-evidence"
+    );
 }
 
 #[test]
@@ -177,6 +181,11 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
             "createDiagnosticContext",
             json!({"projectRoot": root.to_string_lossy(), "context": context}),
         ),
+        jsonl_request(
+            12,
+            "getObservationDelta",
+            json!({"projectRoot": root.to_string_lossy(), "maxNodeChanges": 0}),
+        ),
     ]
     .join("\n")
         + "\n";
@@ -187,7 +196,7 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("response json"))
         .collect::<Vec<_>>();
-    assert_eq!(responses.len(), 10);
+    assert_eq!(responses.len(), 11);
     assert!(responses.iter().all(|response| response["ok"] == true));
     assert_eq!(
         responses[2]["result"]["flowId"],
@@ -206,6 +215,11 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
     );
     assert_eq!(responses[7]["result"]["status"], "current");
     assert_eq!(responses[8]["result"]["node"]["id"], node_id);
+    assert_eq!(
+        responses[10]["result"]["schemaVersion"],
+        "flopeek-observation-delta/v1"
+    );
+    assert_eq!(responses[10]["result"]["status"], "unavailable");
     let context_id = responses[9]["result"]["id"]
         .as_str()
         .expect("context id")

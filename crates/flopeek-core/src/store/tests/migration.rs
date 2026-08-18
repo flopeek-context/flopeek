@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn fresh_and_upgraded_v6_schema_match_and_migration_failure_rolls_back() {
+fn fresh_and_upgraded_v8_schema_match_and_migration_failure_rolls_back() {
     let fresh_root = fixture_root();
     let fresh = open(&fresh_root).expect("fresh schema");
     let fresh_schema = schema_snapshot(&fresh);

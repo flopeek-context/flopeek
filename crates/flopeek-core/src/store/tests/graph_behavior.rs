@@ -251,6 +251,14 @@ fn identical_structure_across_revision_gets_new_observation_and_reuses_graph_ver
     assert_eq!(first.graph.graph_id, second.graph.graph_id);
     assert_eq!(first.graph.graph_version, second.graph.graph_version);
     assert_ne!(first.graph.observation_id, second.graph.observation_id);
+    let delta = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+        .expect("README observation delta");
+    assert_eq!(delta.status, "complete");
+    assert_eq!(delta.graph_relation, "same-structural-graph");
+    assert_eq!(
+        delta.counts,
+        crate::model::ObservationDeltaCounts::default()
+    );
     let second_ref = second
         .context_refs
         .iter()
