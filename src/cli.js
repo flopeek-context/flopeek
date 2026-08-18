@@ -204,7 +204,7 @@ Package identity:
   flopeek --version
 
 Agent tools (MCP over stdio):
-  flopeek mcp [repository] [--package relative/path] [--budget-ms number] [--max-files number] [--max-bytes number] [--no-cache] [--core-mode js|shadow|native|native-experimental]
+  flopeek mcp [repository] [--package relative/path] [--budget-ms number] [--max-files number] [--max-bytes number] [--no-cache] [--core-mode rust|js|shadow|native|native-experimental]
   flopeek bootstrap [repository] [--format summary|json]
 
 Agent host integration (project-local and non-destructive):
@@ -214,7 +214,7 @@ Agent host integration (project-local and non-destructive):
 
 Graph workflow:
   flopeek discover [repository] [--package relative/path] [--budget-ms number] [--max-files number] [--max-bytes number] [--format summary|json]
-  flopeek scan [repository] [--package relative/path] [--budget-ms number] [--max-files number] [--max-bytes number] [--format summary|json|mermaid] [--no-cache] [--core-mode js|shadow|native|native-experimental]
+  flopeek scan [repository] [--package relative/path] [--budget-ms number] [--max-files number] [--max-bytes number] [--format summary|json|mermaid] [--no-cache] [--core-mode rust|js|shadow|native|native-experimental]
   flopeek view [repository] [--mode overview|requests|dependencies] [--scope application|runtime|framework|devtool|all] [--level domain|feature|component|symbol] [--focus node-id] [--max-nodes number] [--max-edges number] [--format summary|json] [--no-cache]
   flopeek impact [repository] [--changed path[,path] | --base git-ref] [--format summary|json]
   flopeek snapshot [repository] [--commit git-ref] [--force] [--format summary|json]

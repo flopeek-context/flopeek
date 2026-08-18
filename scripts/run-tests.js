@@ -51,6 +51,7 @@ for (const name of ["full", "fast", "unit"]) lanes[name].unshift("test/unit/chil
 for (const name of ["full", "fast", "unit"]) lanes[name].unshift("test/unit/monorepo-package-benchmark.test.js");
 for (const name of ["full", "fast", "unit"]) lanes[name].unshift("test/unit/framework-command-flow.test.js");
 for (const name of ["full", "fast", "unit"]) lanes[name].unshift("test/unit/public-core-ci.test.js");
+for (const name of ["full", "unit"]) lanes[name].unshift("test/unit/rust-typescript-authority.test.js");
 for (const name of ["full", "fast", "unit", "package"]) lanes[name].unshift("test/unit/import-safety.test.js");
 for (const name of ["full", "fast", "unit", "package"]) lanes[name].unshift("test/unit/native-release-controls.test.js");
 for (const name of ["full", "fast", "unit", "package"]) lanes[name].unshift(
@@ -87,6 +88,12 @@ const patterns = {
   viewer: "local server|serve watches|serve reports|serve exposes|SvelteKit aliases|benchmark endpoint",
 };
 const args = ["--test", "--test-concurrency=4"];
+// These inherited lanes are compatibility/parity oracles, not production
+// authority selection. Keep them explicitly on JS while the focused Rust/TS
+// lane proves the default and authoritative path without fallback.
+const testEnvironment = ["full", "fast", "unit", "public-source"].includes(lane)
+  ? { ...process.env, FLOPEEK_CORE: process.env.FLOPEEK_CORE || "js" }
+  : process.env;
 if (patterns[lane]) args.push(`--test-name-pattern=${patterns[lane]}`);
 if (lane === "public-source") {
   const isolated = ["test/scanner.test.js", "test/unit/native-incremental-coordinator.test.js", "test/unit/native-inventory-parity.test.js", "test/unit/scan-coordinator.test.js"];
@@ -98,11 +105,11 @@ if (lane === "public-source") {
     ["--test", "--test-concurrency=1", "test/unit/native-inventory-parity.test.js"],
     ["--test", "--test-concurrency=1", "test/unit/scan-coordinator.test.js"],
   ]) {
-    const result = spawnSync(process.execPath, batch, { cwd: root, stdio: "inherit" });
+    const result = spawnSync(process.execPath, batch, { cwd: root, stdio: "inherit", env: testEnvironment });
     if (result.status !== 0) process.exit(result.status || 1);
   }
   process.exit(0);
 }
 args.push(...lanes[lane]);
-const result = spawnSync(process.execPath, args, { cwd: root, stdio: "inherit" });
+const result = spawnSync(process.execPath, args, { cwd: root, stdio: "inherit", env: testEnvironment });
 process.exit(result.status || 0);

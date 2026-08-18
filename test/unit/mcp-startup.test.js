@@ -39,6 +39,7 @@ test("stdio MCP exposes tools and unavailable readiness before its delayed initi
       command: process.execPath,
       args: ["-e", serverProgram, mcpPath, root],
       cwd: path.join(__dirname, "..", ".."),
+      env: { ...process.env, FLOPEEK_CORE: "js" },
       stderr: "pipe",
     }));
 

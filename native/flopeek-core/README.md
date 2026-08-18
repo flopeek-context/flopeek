@@ -48,7 +48,7 @@ reduces repeated long ID storage without changing the Flopeek graph contract.
 - LLM required: `false`; JavaScript repository authority: `false`; historical output is `candidate-not-cause`.
 - Last verified preview artifact: `flopeek@0.2.1-beta.3` (`passed`).
 - Runtime: Node.js 22 or later (`>=22`).
-- Legacy current default core: `js` / javascript; Rust authority cutover is `pending`.
+- Public default core: `rust` / native; Rust authority cutover is `enforced`.
 - Experimental native core: `native-experimental`; rollout is `incomplete` and native-default eligibility is `false`.
 - Release approvals: npm `not-approved`; GitHub Release `not-approved`.
 - JavaScript/default adapters: csharp (csharp; toolchain-conditional; .NET SDK), go (go; toolchain-conditional; Go toolchain), inventory (assembly/astro/c/cpp/headers/kotlin/makefile/ruby/scala/shell/swift/vue; inventory-only), java (java; bundled), php (php; bundled), python (python; bundled), rust (rust; bundled), svelte (svelte; bundled), typescript (javascript/jsx/tsx/typescript; bundled).

@@ -3,7 +3,7 @@
 const { evaluateNativeDefaultRollout } = require("./native-rollout-gate");
 
 const CORE_MODE_SCHEMA = "flopeek-core-mode/v1";
-const CORE_MODES = Object.freeze(["js", "shadow", "native", "native-experimental"]);
+const CORE_MODES = Object.freeze(["rust", "js", "shadow", "native", "native-experimental"]);
 
 class CoreModeError extends Error {
   constructor(message) {
@@ -14,7 +14,7 @@ class CoreModeError extends Error {
 }
 
 function requestedCoreMode(value = process.env.FLOPEEK_CORE) {
-  const normalized = String(value || "js").trim().toLowerCase();
+  const normalized = String(value || "rust").trim().toLowerCase();
   if (!CORE_MODES.includes(normalized)) {
     throw new CoreModeError(`FLOPEEK_CORE must be one of ${CORE_MODES.join(", ")}; received ${JSON.stringify(value)}.`);
   }
@@ -29,6 +29,19 @@ function selectCoreMode(options = {}) {
   const requestedMode = requestedCoreMode(options.mode);
   const gate = evaluateNativeDefaultRollout(options.rolloutEvidence || {});
   const nativeAvailable = options.nativeAvailable === true;
+  if (requestedMode === "rust") {
+    return Object.freeze({
+      schemaVersion: CORE_MODE_SCHEMA,
+      requestedMode,
+      selectedImplementation: "native",
+      sourceAuthority: "rust",
+      persistedAuthority: "sqlite",
+      nativeShadow: false,
+      fallback: null,
+      unavailableReason: nativeAvailable ? null : "rust-core-unavailable",
+      gate,
+    });
+  }
   if (requestedMode === "js") {
     return Object.freeze({
       schemaVersion: CORE_MODE_SCHEMA,

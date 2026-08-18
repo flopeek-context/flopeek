@@ -28,16 +28,17 @@
   },
   "core": {
     "modes": [
+      "rust",
       "js",
       "shadow",
       "native",
       "native-experimental"
     ],
-    "publicDefaultMode": "js",
-    "publicDefaultImplementation": "javascript",
+    "publicDefaultMode": "rust",
+    "publicDefaultImplementation": "native",
     "experimentalMode": "native-experimental",
     "experimentalImplementation": "native",
-    "authorityCutoverStatus": "pending",
+    "authorityCutoverStatus": "enforced",
     "nativeRolloutStatus": "incomplete",
     "nativeDefaultEligible": false
   },

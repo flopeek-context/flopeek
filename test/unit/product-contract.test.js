@@ -32,9 +32,10 @@ test("product contract is derived from package, rollout, approval, mode, and ada
   assert.equal(contract.authority.javascriptRepositoryAuthority, false);
   assert.equal(contract.authority.automaticRootCauseClaims, false);
   assert.equal(contract.authority.historicalOutputClass, "candidate-not-cause");
-  assert.equal(contract.core.publicDefaultImplementation, "javascript");
+  assert.equal(contract.core.publicDefaultMode, "rust");
+  assert.equal(contract.core.publicDefaultImplementation, "native");
   assert.equal(contract.core.experimentalImplementation, "native");
-  assert.equal(contract.core.authorityCutoverStatus, "pending");
+  assert.equal(contract.core.authorityCutoverStatus, "enforced");
   assert.equal(contract.core.nativeRolloutStatus, "incomplete");
   assert.equal(contract.core.nativeDefaultEligible, false);
   assert.ok(contract.adapters.native.some((adapter) => adapter.id === "go"));

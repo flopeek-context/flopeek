@@ -1,5 +1,10 @@
 # Native Core Completion Tracker
 
+> **Historical migration record:** this document captures the inherited rollout
+> gate and JavaScript-default era. `AGENTS.md` and the generated product contract
+> now define Rust as repository-truth authority; statements below that call
+> JavaScript the current/default authority are retained as historical evidence.
+
 This document is the verification index for the Native Core stabilization
 charter. A local gate is marked `passing` only after its command exits
 successfully. Candidate and promotion gates remain separate: local success is

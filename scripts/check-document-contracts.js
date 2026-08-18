@@ -33,6 +33,11 @@ requireMatch(support, /fixture gate reports 40\/40 expected relationships/, "cur
 
 try {
   const productContract = buildProductContractFromInputs(loadProductContractInputs(root));
+  if (productContract.core.publicDefaultMode !== "rust"
+    || productContract.core.publicDefaultImplementation !== "native"
+    || productContract.core.authorityCutoverStatus !== "enforced") {
+    failures.push("Product contract must enforce Rust as the public repository-truth authority.");
+  }
   const committed = read("contracts/product-contract.json");
   if (canonicalText(committed) !== canonicalText(`${JSON.stringify(productContract, null, 2)}\n`)) failures.push("Generated product contract manifest is stale.");
   assertGeneratedDocuments(productContract, Object.fromEntries(DOCUMENTS.map((name) => [name, read(name)])));

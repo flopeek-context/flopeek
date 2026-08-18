@@ -138,13 +138,32 @@ function completeEvidence() {
   };
 }
 
-test("core mode defaults to JavaScript and rejects ambiguous activation", () => {
-  assert.equal(requestedCoreMode(undefined), "js");
+test("core mode defaults to strict Rust authority while JavaScript remains explicit compatibility", () => {
+  assert.equal(requestedCoreMode(undefined), "rust");
   assert.throws(() => requestedCoreMode("auto"), CoreModeError);
+  const authoritative = selectCoreMode({ nativeAvailable: true });
+  assert.equal(authoritative.schemaVersion, CORE_MODE_SCHEMA);
+  assert.equal(authoritative.requestedMode, "rust");
+  assert.equal(authoritative.selectedImplementation, "native");
+  assert.equal(authoritative.sourceAuthority, "rust");
+  assert.equal(authoritative.persistedAuthority, "sqlite");
+  assert.equal(authoritative.fallback, null);
   const selected = selectCoreMode({ mode: "js" });
   assert.equal(selected.schemaVersion, CORE_MODE_SCHEMA);
   assert.equal(selected.selectedImplementation, "javascript");
   assert.equal(selected.nativeShadow, false);
+});
+
+test("default configured authority never reads or constructs JavaScript fallback", async () => {
+  const nativeCore = { ...createJsCoreClient(), implementation: "native-experimental", sourceAuthority: "rust", backendAuthority: "rust-sqlite" };
+  const options = { nativeCore };
+  Object.defineProperty(options, "javascript", {
+    get() { throw new Error("Rust authority must not read JavaScript fallback"); },
+  });
+  const selected = createConfiguredCoreClient(options);
+  assert.equal(selected, nativeCore);
+  assert.equal(selected.sourceAuthority, "rust");
+  await selected.close();
 });
 
 test("shadow mode is explicit while preserving JavaScript as the public implementation", () => {
@@ -480,8 +499,9 @@ test("failed SQLite recovery keeps authority unknown and blocks JavaScript", asy
   await selected.close();
 });
 
-test("surface presentation mode cannot accidentally select a core implementation", async () => {
+test("surface presentation mode cannot displace the default Rust authority", async () => {
   const client = createSurfaceCoreClient({ mode: "overview" });
-  assert.equal(client.implementation, "javascript");
+  assert.equal(client.implementation, "native-experimental");
+  assert.equal(client.sourceAuthority, "rust");
   await client.close();
 });

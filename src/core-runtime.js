@@ -1,7 +1,7 @@
 "use strict";
 
 const path = require("node:path");
-const { selectCoreMode } = require("./core-mode");
+const { requestedCoreMode, selectCoreMode } = require("./core-mode");
 const { canonicalRealpath } = require("./canonical-path");
 const { CORE_CLIENT_SCHEMA, assertCoreClient } = require("./core-client");
 const { createJsCoreClient } = require("./js-core-client");
@@ -11,7 +11,7 @@ const { NativeProtocolClient } = require("./native-protocol-client");
 const { createShadowCoreClient } = require("./shadow-core-client");
 const { loadBundledNativeRolloutEvidence, probeVerifiedNativeRuntime } = require("./native-rollout-evidence");
 
-const CORE_MODES = new Set(["js", "shadow", "native", "native-experimental"]);
+const CORE_MODES = new Set(["rust", "js", "shadow", "native", "native-experimental"]);
 const FLOPEEK_PACKAGE_ROOT = path.resolve(__dirname, "..");
 
 function createVerifiedNativeProtocolClient(verifiedRuntime, packageRoot, ProtocolClient = NativeProtocolClient) {
@@ -183,7 +183,8 @@ function createConfiguredCoreClient(options = {}) {
     rolloutEvidence: options.rolloutEvidence,
     nativeAvailable: options.enableNativeCore === true || Boolean(options.nativeCore),
   });
-  if (options.strictNative === true && selection.selectedImplementation !== "native") {
+  const strictNative = selection.requestedMode === "rust" || options.strictNative === true;
+  if (strictNative && selection.selectedImplementation !== "native") {
     const error = new Error(`Strict native core is unavailable: ${selection.fallback?.reason || "native mode was not selected"}.`);
     error.code = "strict-native-unavailable";
     error.gateReasons = selection.gate.reasons;
@@ -205,7 +206,7 @@ function createConfiguredCoreClient(options = {}) {
       extensions: options.nativeExtensions,
       sourceAuthority: "rust",
     }));
-    if (options.strictNative === true) return native;
+    if (strictNative) return native;
     const javascript = options.javascript || createJsCoreClient();
     return createNativeFallbackCoreClient(native, javascript);
   }
@@ -255,7 +256,7 @@ function observeCoreRuntime(selection, core) {
 // rather than silently reporting a JavaScript scan as a requested native one.
 function createSurfaceCoreRuntime(options = {}) {
   const mode = options.coreMode == null
-    ? (CORE_MODES.has(options.mode) ? options.mode : undefined)
+    ? (CORE_MODES.has(options.mode) ? options.mode : requestedCoreMode())
     : options.coreMode;
   let bundledEvidence = null;
   let verifiedRuntime = null;
@@ -274,9 +275,11 @@ function createSurfaceCoreRuntime(options = {}) {
   const verifiedNative = approvedVerifiedRuntime
     ? createVerifiedNativeProtocolClient(verifiedRuntime, packageRoot)
     : null;
+  const rustAuthority = mode === "rust";
   const nativeAvailable = mode === "native"
     ? approvedVerifiedRuntime
-    : options.enableNativeCore === true
+    : rustAuthority
+      || options.enableNativeCore === true
       || Boolean(options.nativeCore)
       || Boolean(options.native)
       || mode === "native-experimental";
@@ -296,6 +299,7 @@ function createSurfaceCoreRuntime(options = {}) {
     // FLOPEEK_NATIVE_CORE.
     native: mode === "native" ? verifiedNative : options.native,
     nativeCore: mode === "native" ? undefined : options.nativeCore,
+    strictNative: rustAuthority || options.strictNative === true,
   });
   return Object.freeze({ core, selection: Object.freeze({
     ...selection,

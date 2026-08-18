@@ -18,7 +18,7 @@ test("graph, agent context, and capability API expose the same adapter registry 
     const context = projectView(graph).aiContext;
     assert.deepEqual(context.adapterCapabilities, graph.analysis.adapterCapabilities);
     assert.deepEqual(context.executionAdapterCapabilities, graph.analysis.executionAdapterCapabilities);
-    app = await startServer({ root, port: 0 });
+    app = await startServer({ root, port: 0, coreMode: "js" });
     const response = await fetch(`http://127.0.0.1:${app.port}/api/capabilities`);
     assert.equal(response.status, 200);
     const api = await response.json();
@@ -29,7 +29,7 @@ test("graph, agent context, and capability API expose the same adapter registry 
     assert.equal(csharp.parser, "csharp-roslyn");
     assert.equal(csharp.requiredToolchain, ".NET SDK");
   } finally {
-    if (app) await new Promise((resolve) => app.server.close(resolve));
+    if (app) await app.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

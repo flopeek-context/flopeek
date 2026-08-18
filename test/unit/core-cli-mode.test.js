@@ -20,7 +20,7 @@ const expectedBundledNativeFallback = () => {
 test("CLI help exposes the explicit native experimental dogfood mode", async () => {
   const { stdout, stderr } = await execFileAsync(process.execPath, [cli, "help"], { cwd: repositoryRoot, windowsHide: true });
   assert.equal(stderr, "");
-  assert.match(stdout, /--core-mode js\|shadow\|native\|native-experimental/);
+  assert.match(stdout, /--core-mode rust\|js\|shadow\|native\|native-experimental/);
 });
 
 test("CLI shadow core mode awaits the asynchronous facade and exits cleanly", async () => {

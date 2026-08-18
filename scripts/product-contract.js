@@ -70,7 +70,7 @@ function buildProductContractFromInputs(inputs) {
   if (rolloutEvidence.binding?.packageVersion !== packageJson.version) {
     throw new Error("Native rollout evidence package version differs from package.json.");
   }
-  if (!Array.isArray(coreModes) || !["js", "shadow", "native", "native-experimental"].every((mode) => coreModes.includes(mode))) {
+  if (!Array.isArray(coreModes) || !["rust", "js", "shadow", "native", "native-experimental"].every((mode) => coreModes.includes(mode))) {
     throw new Error("Core mode contract is incomplete.");
   }
   if (repositoryProvenance.canonicalRepository?.repository !== CANONICAL_REPOSITORY
@@ -110,11 +110,11 @@ function buildProductContractFromInputs(inputs) {
     },
     core: {
       modes: [...coreModes],
-      publicDefaultMode: "js",
-      publicDefaultImplementation: "javascript",
+      publicDefaultMode: "rust",
+      publicDefaultImplementation: "native",
       experimentalMode: "native-experimental",
       experimentalImplementation: "native",
-      authorityCutoverStatus: "pending",
+      authorityCutoverStatus: "enforced",
       nativeRolloutStatus: rolloutEvidence.status,
       nativeDefaultEligible: nativeRolloutComplete,
     },
@@ -167,7 +167,7 @@ function renderProductContractBlock(contract, document) {
     `- LLM required: \`${contract.authority.llmRequired}\`; JavaScript repository authority: \`${contract.authority.javascriptRepositoryAuthority}\`; historical output is \`${contract.authority.historicalOutputClass}\`.`,
     `- Last verified preview artifact: \`${contract.package.name}@${contract.package.lastVerifiedPreview.version}\` (\`${contract.package.lastVerifiedPreview.status}\`).`,
     `- Runtime: Node.js ${contract.package.minimumNodeMajor} or later (\`${contract.package.enginesNode}\`).`,
-    `- Legacy current default core: \`${contract.core.publicDefaultMode}\` / ${contract.core.publicDefaultImplementation}; Rust authority cutover is \`${contract.core.authorityCutoverStatus}\`.`,
+    `- Public default core: \`${contract.core.publicDefaultMode}\` / ${contract.core.publicDefaultImplementation}; Rust authority cutover is \`${contract.core.authorityCutoverStatus}\`.`,
     `- Experimental native core: \`${contract.core.experimentalMode}\`; rollout is \`${contract.core.nativeRolloutStatus}\` and native-default eligibility is \`${contract.core.nativeDefaultEligible}\`.`,
     `- Release approvals: npm \`${contract.release.npm.status}\`; GitHub Release \`${contract.release.github.status}\`.`,
   ];
