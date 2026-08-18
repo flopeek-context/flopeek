@@ -8,13 +8,14 @@ use crate::model::{
     ContextRef, GraphEdge, GraphNode, GraphSnapshot, PRODUCT_IDENTITY, STORE_SCHEMA, ScanResult,
     SourceFile, StoreStatus, TypeScriptFacts,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_DIRECTORY: &str = ".flopeek";
 pub const STORE_FILENAME: &str = "flopeek.sqlite3";
+pub const CURRENT_USER_VERSION: i64 = 4;
 
 pub fn database_path(root: &Path) -> PathBuf {
     root.join(STORE_DIRECTORY).join(STORE_FILENAME)
@@ -29,7 +30,7 @@ pub fn open(root: &Path) -> Result<Connection, String> {
         )
     })?;
     let path = database_path(root);
-    let connection = Connection::open(&path)
+    let mut connection = Connection::open(&path)
         .map_err(|error| format!("Unable to open SQLite database {}: {error}", path.display()))?;
     connection
         .busy_timeout(std::time::Duration::from_secs(5))
@@ -41,15 +42,51 @@ pub fn open(root: &Path) -> Result<Connection, String> {
              PRAGMA synchronous = NORMAL;",
         )
         .map_err(|error| format!("Unable to configure SQLite: {error}"))?;
-    initialize_schema(&connection)?;
+    initialize_schema(&mut connection)?;
     Ok(connection)
 }
 
-fn initialize_schema(connection: &Connection) -> Result<(), String> {
-    connection
+fn initialize_schema(connection: &mut Connection) -> Result<(), String> {
+    let mut version = connection
+        .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("Unable to read SQLite schema version: {error}"))?;
+    if version > CURRENT_USER_VERSION {
+        return Err(format!(
+            "SQLite database schema version {version} is newer than supported version {CURRENT_USER_VERSION}."
+        ));
+    }
+
+    while version < CURRENT_USER_VERSION {
+        let target = version + 1;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| {
+                format!("Unable to begin SQLite migration {version}->{target}: {error}")
+            })?;
+        match target {
+            1 => migration_v1(&transaction)?,
+            2 => migration_v2(&transaction)?,
+            3 => migration_v3(&transaction)?,
+            4 => migration_v4(&transaction)?,
+            _ => unreachable!("migration target is bounded by CURRENT_USER_VERSION"),
+        }
+        transaction
+            .execute_batch(&format!("PRAGMA user_version = {target};"))
+            .map_err(|error| {
+                format!("Unable to record SQLite migration version {target}: {error}")
+            })?;
+        transaction.commit().map_err(|error| {
+            format!("Unable to commit SQLite migration {version}->{target}: {error}")
+        })?;
+        version = target;
+    }
+    Ok(())
+}
+
+fn migration_v1(transaction: &Transaction<'_>) -> Result<(), String> {
+    transaction
         .execute_batch(
-            "PRAGMA user_version = 2;
-             CREATE TABLE IF NOT EXISTS product_metadata (
+            "CREATE TABLE IF NOT EXISTS product_metadata (
                  key TEXT PRIMARY KEY NOT NULL,
                  value TEXT NOT NULL
              );
@@ -120,52 +157,437 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
                  graph_version INTEGER NOT NULL REFERENCES graph_versions(graph_version),
                  payload_json TEXT NOT NULL,
                  created_at INTEGER NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS graph_versions_project_idx ON graph_versions(project_id, graph_version);
+             );",
+        )
+        .map_err(|error| format!("Unable to initialize SQLite base schema: {error}"))
+}
+
+fn migration_v2(transaction: &Transaction<'_>) -> Result<(), String> {
+    if !table_columns(transaction, "graph_versions")?
+        .iter()
+        .any(|column| column == "omissions_json")
+    {
+        transaction
+            .execute(
+                "ALTER TABLE graph_versions ADD COLUMN omissions_json TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .map_err(|error| format!("Unable to migrate graph_versions: {error}"))?;
+    }
+    transaction
+        .execute_batch(
+            "CREATE INDEX IF NOT EXISTS graph_versions_project_idx ON graph_versions(project_id, graph_version);
              CREATE INDEX IF NOT EXISTS context_refs_project_idx ON context_refs(project_id, graph_version);
              CREATE INDEX IF NOT EXISTS diagnostic_assertions_context_idx ON diagnostic_assertions(context_id, revision);",
         )
-        .map_err(|error| format!("Unable to initialize SQLite schema: {error}"))?;
-    ensure_column(
-        connection,
-        "graph_versions",
-        "omissions_json",
-        "TEXT NOT NULL DEFAULT '[]'",
-    )?;
-    ensure_column(connection, "historical_candidates", "context_id", "TEXT")?;
-    connection
-        .execute(
-            "CREATE INDEX IF NOT EXISTS historical_candidates_context_idx
-             ON historical_candidates(context_id, graph_version)",
-            [],
-        )
-        .map_err(|error| format!("Unable to initialize historical candidate index: {error}"))?;
-    Ok(())
+        .map_err(|error| format!("Unable to create SQLite indexes: {error}"))
 }
 
-fn ensure_column(
-    connection: &Connection,
+fn migration_v3(transaction: &Transaction<'_>) -> Result<(), String> {
+    if table_exists(transaction, "historical_candidates")? {
+        let columns = table_columns(transaction, "historical_candidates")?;
+        transaction
+            .execute_batch(
+                "ALTER TABLE historical_candidates RENAME TO historical_candidates_v2;
+                 CREATE TABLE historical_candidates (
+                     id TEXT PRIMARY KEY NOT NULL,
+                     project_id TEXT NOT NULL,
+                     context_id TEXT NOT NULL REFERENCES diagnostic_contexts(id),
+                     graph_version INTEGER NOT NULL REFERENCES graph_versions(graph_version),
+                     payload_json TEXT NOT NULL,
+                     created_at INTEGER NOT NULL
+                 );",
+            )
+            .map_err(|error| format!("Unable to rebuild historical_candidates: {error}"))?;
+        if columns.iter().any(|column| column == "context_id") {
+            transaction
+                .execute(
+                    "INSERT INTO historical_candidates(id, project_id, context_id, graph_version, payload_json, created_at)
+                     SELECT old.id, old.project_id, old.context_id, old.graph_version, old.payload_json, old.created_at
+                     FROM historical_candidates_v2 old
+                     WHERE old.context_id IS NOT NULL
+                       AND EXISTS (SELECT 1 FROM diagnostic_contexts context WHERE context.id = old.context_id)
+                       AND EXISTS (SELECT 1 FROM graph_versions graph WHERE graph.graph_version = old.graph_version)",
+                    [],
+                )
+                .map_err(|error| format!("Unable to retain valid historical candidates: {error}"))?;
+        }
+        transaction
+            .execute_batch("DROP TABLE historical_candidates_v2;")
+            .map_err(|error| {
+                format!("Unable to remove derived historical candidate backup: {error}")
+            })?;
+    } else {
+        transaction
+            .execute_batch(
+                "CREATE TABLE historical_candidates (
+                     id TEXT PRIMARY KEY NOT NULL,
+                     project_id TEXT NOT NULL,
+                     context_id TEXT NOT NULL REFERENCES diagnostic_contexts(id),
+                     graph_version INTEGER NOT NULL REFERENCES graph_versions(graph_version),
+                     payload_json TEXT NOT NULL,
+                     created_at INTEGER NOT NULL
+                 );",
+            )
+            .map_err(|error| format!("Unable to create historical_candidates: {error}"))?;
+    }
+    transaction
+        .execute_batch(
+            "CREATE INDEX IF NOT EXISTS historical_candidates_context_idx
+                 ON historical_candidates(context_id, graph_version);",
+        )
+        .map_err(|error| format!("Unable to create historical candidate index: {error}"))
+}
+
+fn migration_v4(transaction: &Transaction<'_>) -> Result<(), String> {
+    add_column(
+        transaction,
+        "graph_nodes",
+        "evidence_fingerprint",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column(
+        transaction,
+        "context_refs",
+        "origin_observation_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column(
+        transaction,
+        "context_refs",
+        "origin_source_revision",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column(
+        transaction,
+        "context_refs",
+        "origin_fingerprint",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column(
+        transaction,
+        "context_refs",
+        "fingerprint_scope",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS graph_observations (
+                 observation_id TEXT PRIMARY KEY NOT NULL,
+                 project_id TEXT NOT NULL,
+                 graph_version INTEGER NOT NULL REFERENCES graph_versions(graph_version),
+                 git_revision TEXT NOT NULL,
+                 source_fingerprint TEXT NOT NULL,
+                 source_manifest_json TEXT NOT NULL DEFAULT '[]',
+                 dirty INTEGER NOT NULL CHECK (dirty IN (0, 1)),
+                 observed_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS graph_observations_project_idx
+                 ON graph_observations(project_id, observed_at, graph_version);
+             CREATE TABLE IF NOT EXISTS project_state (
+                 project_id TEXT PRIMARY KEY NOT NULL,
+                 current_observation_id TEXT NOT NULL REFERENCES graph_observations(observation_id)
+             );
+             CREATE INDEX IF NOT EXISTS context_refs_origin_idx
+                 ON context_refs(project_id, graph_version, node_id);",
+        )
+        .map_err(|error| format!("Unable to initialize observation schema: {error}"))?;
+    add_column(
+        transaction,
+        "graph_observations",
+        "source_manifest_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+
+    let graph_rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT graph_version, graph_id, project_id, source_revision
+                 FROM graph_versions ORDER BY graph_version",
+            )
+            .map_err(|error| format!("Unable to inspect graph observations: {error}"))?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|error| format!("Unable to enumerate graph observations: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Unable to decode graph observations: {error}"))?
+    };
+    for (graph_version, graph_id, project_id, source_revision) in graph_rows {
+        let source_rows = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT path, language, bytes, hash FROM source_files
+                     WHERE graph_version = ?1 ORDER BY path",
+                )
+                .map_err(|error| format!("Unable to inspect source observation: {error}"))?;
+            statement
+                .query_map(params![graph_version], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(|error| format!("Unable to enumerate source observation: {error}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("Unable to decode source observation: {error}"))?
+        };
+        let source_fingerprint = blake3::hash(
+            &serde_json::to_vec(&source_rows)
+                .map_err(|error| format!("Unable to encode source observation: {error}"))?,
+        )
+        .to_hex()
+        .to_string();
+        let source_manifest = source_rows
+            .iter()
+            .map(|(path, language, bytes, hash)| SourceFile {
+                path: path.clone(),
+                language: language.clone(),
+                bytes: *bytes as u64,
+                hash: hash.clone(),
+            })
+            .collect::<Vec<_>>();
+        let source_manifest_json = serde_json::to_string(&source_manifest)
+            .map_err(|error| format!("Unable to encode source observation manifest: {error}"))?;
+        let dirty = source_revision.ends_with("+dirty");
+        let git_revision = source_revision
+            .strip_suffix("+dirty")
+            .unwrap_or(&source_revision)
+            .to_string();
+        let observation_id =
+            observation_id(&project_id, &source_revision, &source_fingerprint, &graph_id);
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO graph_observations(
+                    observation_id, project_id, graph_version, git_revision,
+                    source_fingerprint, source_manifest_json, dirty, observed_at
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    observation_id,
+                    project_id,
+                    graph_version,
+                    git_revision,
+                    source_fingerprint,
+                    source_manifest_json,
+                    i64::from(dirty),
+                    now_seconds()
+                ],
+            )
+            .map_err(|error| format!("Unable to backfill graph observation: {error}"))?;
+    }
+
+    transaction
+        .execute_batch(
+            "UPDATE context_refs
+             SET origin_observation_id = COALESCE((
+                 SELECT observation_id FROM graph_observations observation
+                 WHERE observation.project_id = context_refs.project_id
+                   AND observation.graph_version = context_refs.graph_version
+             ), ''),
+                 origin_source_revision = COALESCE((
+                 SELECT git_revision FROM graph_observations observation
+                 WHERE observation.project_id = context_refs.project_id
+                   AND observation.graph_version = context_refs.graph_version
+             ), ''),
+                 fingerprint_scope = CASE
+                     WHEN EXISTS (
+                         SELECT 1 FROM graph_nodes node
+                         WHERE node.graph_version = context_refs.graph_version
+                           AND node.node_id = context_refs.node_id
+                           AND node.evidence_fingerprint <> ''
+                     ) THEN 'ast-and-direct-edges'
+                     ELSE 'legacy-file-v1'
+                 END,
+                 origin_fingerprint = COALESCE((
+                     SELECT NULLIF(node.evidence_fingerprint, '')
+                     FROM graph_nodes node
+                     WHERE node.graph_version = context_refs.graph_version
+                       AND node.node_id = context_refs.node_id
+                 ), COALESCE((
+                     SELECT source.hash FROM source_files source
+                     JOIN graph_nodes node ON node.graph_version = source.graph_version
+                         AND node.path = source.path
+                     WHERE node.graph_version = context_refs.graph_version
+                       AND node.node_id = context_refs.node_id
+                 ), ''));
+             DELETE FROM historical_candidates;",
+        )
+        .map_err(|error| format!("Unable to backfill Context Ref provenance: {error}"))?;
+
+    let projects = {
+        let mut statement = transaction
+            .prepare("SELECT DISTINCT project_id FROM graph_observations ORDER BY project_id")
+            .map_err(|error| format!("Unable to inspect project observations: {error}"))?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("Unable to enumerate project observations: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Unable to decode project observations: {error}"))?
+    };
+    for project in projects {
+        transaction
+            .execute(
+                "INSERT INTO project_state(project_id, current_observation_id)
+                 SELECT ?1, observation_id FROM graph_observations
+                 WHERE project_id = ?1 ORDER BY observed_at DESC, graph_version DESC LIMIT 1
+                 ON CONFLICT(project_id) DO UPDATE SET current_observation_id = excluded.current_observation_id",
+                params![project],
+            )
+            .map_err(|error| format!("Unable to backfill current project observation: {error}"))?;
+    }
+    migrate_context_payloads(transaction)
+}
+
+fn add_column(
+    transaction: &Transaction<'_>,
     table: &str,
     column: &str,
     definition: &str,
 ) -> Result<(), String> {
-    let mut statement = connection
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|error| format!("Unable to inspect {table} schema: {error}"))?;
-    let columns = statement
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|error| format!("Unable to inspect {table} columns: {error}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Unable to decode {table} columns: {error}"))?;
-    if !columns.iter().any(|existing| existing == column) {
-        connection
+    if !table_columns(transaction, table)?
+        .iter()
+        .any(|name| name == column)
+    {
+        transaction
             .execute(
                 &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
                 [],
             )
-            .map_err(|error| format!("Unable to migrate {table} schema: {error}"))?;
+            .map_err(|error| format!("Unable to migrate {table}.{column}: {error}"))?;
     }
     Ok(())
+}
+
+fn observation_id(
+    project_id: &str,
+    source_revision: &str,
+    source_fingerprint: &str,
+    graph_id: &str,
+) -> String {
+    let input = format!(
+        "flopeek-observation-v1\0{project_id}\0{source_revision}\0{source_fingerprint}\0{graph_id}"
+    );
+    format!("observation_{}", blake3::hash(input.as_bytes()).to_hex())
+}
+
+fn migrate_context_payloads(transaction: &Transaction<'_>) -> Result<(), String> {
+    let rows = {
+        let mut statement = transaction
+            .prepare("SELECT id, payload_json FROM diagnostic_contexts")
+            .map_err(|error| format!("Unable to inspect Diagnostic Context payloads: {error}"))?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("Unable to enumerate Diagnostic Context payloads: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Unable to decode Diagnostic Context payloads: {error}"))?
+    };
+    for (id, payload) in rows {
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+            continue;
+        };
+        let Some(basis) = value
+            .get_mut("currentGraphBasis")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        let Some(graph_version) = basis
+            .get("graphVersion")
+            .and_then(serde_json::Value::as_i64)
+        else {
+            continue;
+        };
+        let observation = transaction
+            .query_row(
+                "SELECT observation_id FROM graph_observations WHERE graph_version = ?1 ORDER BY observed_at DESC LIMIT 1",
+                params![graph_version],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("Unable to resolve Diagnostic Context observation: {error}"))?;
+        basis.insert(
+            "observationId".to_string(),
+            serde_json::Value::String(observation.unwrap_or_default()),
+        );
+        if let Some(schema) = value.get_mut("schemaVersion") {
+            *schema =
+                serde_json::Value::String(crate::model::DIAGNOSTIC_CONTEXT_SCHEMA.to_string());
+        }
+        let updated = serde_json::to_string(&value)
+            .map_err(|error| format!("Unable to encode migrated Diagnostic Context: {error}"))?;
+        transaction
+            .execute(
+                "UPDATE diagnostic_contexts SET payload_json = ?1 WHERE id = ?2",
+                params![updated, id],
+            )
+            .map_err(|error| format!("Unable to persist migrated Diagnostic Context: {error}"))?;
+    }
+    migrate_assertion_payloads(transaction)
+}
+
+fn migrate_assertion_payloads(transaction: &Transaction<'_>) -> Result<(), String> {
+    let rows = {
+        let mut statement = transaction
+            .prepare("SELECT id, payload_json FROM diagnostic_assertions")
+            .map_err(|error| format!("Unable to inspect Diagnostic Assertion payloads: {error}"))?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("Unable to enumerate Diagnostic Assertion payloads: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Unable to decode Diagnostic Assertion payloads: {error}"))?
+    };
+    for (id, payload) in rows {
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+            continue;
+        };
+        if let Some(schema) = value.get_mut("schemaVersion") {
+            *schema =
+                serde_json::Value::String(crate::model::DIAGNOSTIC_ASSERTION_SCHEMA.to_string());
+        }
+        let updated = serde_json::to_string(&value)
+            .map_err(|error| format!("Unable to encode migrated Diagnostic Assertion: {error}"))?;
+        transaction
+            .execute(
+                "UPDATE diagnostic_assertions SET payload_json = ?1 WHERE id = ?2",
+                params![updated, id],
+            )
+            .map_err(|error| format!("Unable to persist migrated Diagnostic Assertion: {error}"))?;
+    }
+    Ok(())
+}
+
+fn table_exists(transaction: &Transaction<'_>, table: &str) -> Result<bool, String> {
+    transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            params![table],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|value| value != 0)
+        .map_err(|error| format!("Unable to inspect SQLite table {table}: {error}"))
+}
+
+fn table_columns(transaction: &Transaction<'_>, table: &str) -> Result<Vec<String>, String> {
+    let mut statement = transaction
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|error| format!("Unable to inspect {table} schema: {error}"))?;
+    statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| format!("Unable to inspect {table} columns: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Unable to decode {table} columns: {error}"))
 }
 
 pub fn persist_scan(
@@ -271,13 +693,52 @@ pub fn persist_scan(
         persist_graph_rows(&transaction, version, &snapshot, facts)?;
         version as u64
     };
+    snapshot.graph_version = graph_version;
+    let dirty = snapshot.source_revision.ends_with("+dirty");
+    let git_revision = snapshot
+        .source_revision
+        .strip_suffix("+dirty")
+        .unwrap_or(&snapshot.source_revision)
+        .to_string();
+    let observation = observation_id(
+        &snapshot.project_id,
+        &snapshot.source_revision,
+        &snapshot.source_fingerprint,
+        &snapshot.graph_id,
+    );
+    let source_manifest_json = serde_json::to_string(&snapshot.files)
+        .map_err(|error| format!("Unable to encode graph observation manifest: {error}"))?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO graph_observations(
+                observation_id, project_id, graph_version, git_revision,
+                source_fingerprint, source_manifest_json, dirty, observed_at
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                observation,
+                snapshot.project_id,
+                graph_version as i64,
+                git_revision,
+                snapshot.source_fingerprint,
+                source_manifest_json,
+                i64::from(dirty),
+                now_seconds()
+            ],
+        )
+        .map_err(|error| format!("Unable to persist graph observation: {error}"))?;
+    snapshot.observation_id = observation;
+    transaction
+        .execute(
+            "INSERT INTO project_state(project_id, current_observation_id)
+             VALUES(?1, ?2)
+             ON CONFLICT(project_id) DO UPDATE SET current_observation_id = excluded.current_observation_id",
+            params![snapshot.project_id, snapshot.observation_id],
+        )
+        .map_err(|error| format!("Unable to update current project observation: {error}"))?;
+    let refs = context::for_snapshot(&transaction, &snapshot)?;
     transaction
         .commit()
-        .map_err(|error| format!("Unable to commit SQLite graph transaction: {error}"))?;
-
-    snapshot.graph_version = graph_version;
-    let connection = open(root)?;
-    let refs = context::for_snapshot(&connection, &snapshot)?;
+        .map_err(|error| format!("Unable to commit SQLite graph/context transaction: {error}"))?;
     Ok(ScanResult {
         schema_version: STORE_SCHEMA.to_string(),
         product: PRODUCT_IDENTITY.to_string(),
@@ -328,15 +789,16 @@ fn persist_graph_rows(
     for node in &snapshot.nodes {
         transaction
             .execute(
-                "INSERT INTO graph_nodes(graph_version, node_id, kind, path, name, language)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO graph_nodes(graph_version, node_id, kind, path, name, language, evidence_fingerprint)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     graph_version,
                     node.id,
                     node.kind,
                     node.path,
                     node.name,
-                    node.language
+                    node.language,
+                    node.evidence_fingerprint
                 ],
             )
             .map_err(|error| format!("Unable to persist graph node {}: {error}", node.id))?;
@@ -366,9 +828,17 @@ pub fn status(root: &Path) -> Result<StoreStatus, String> {
         .unwrap_or_else(|| crate::graph::project_id(root));
     let current = connection
         .query_row(
-            "SELECT graph_id, graph_version FROM graph_versions WHERE project_id = ?1 ORDER BY graph_version DESC LIMIT 1",
+            "SELECT graph.graph_id, graph.graph_version, observation.observation_id
+             FROM project_state state
+             JOIN graph_observations observation ON observation.observation_id = state.current_observation_id
+             JOIN graph_versions graph ON graph.graph_version = observation.graph_version
+             WHERE state.project_id = ?1",
             params![project_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            )),
         )
         .optional()
         .map_err(|error| format!("Unable to read current graph: {error}"))?;
@@ -379,7 +849,7 @@ pub fn status(root: &Path) -> Result<StoreStatus, String> {
             |row| row.get::<_, i64>(0),
         )
         .map_err(|error| format!("Unable to count graphs: {error}"))?;
-    let (node_count, edge_count) = if let Some((_, version)) = current {
+    let (node_count, edge_count) = if let Some((_, version, _)) = current {
         (
             connection
                 .query_row(
@@ -404,10 +874,11 @@ pub fn status(root: &Path) -> Result<StoreStatus, String> {
         path: database_path(root).to_string_lossy().into_owned(),
         project_id,
         current_graph_id: current.as_ref().map(|value| value.0.clone()),
-        current_graph_version: current.map(|value| value.1 as u64),
+        current_graph_version: current.as_ref().map(|value| value.1 as u64),
         graph_count: graph_count as u64,
         node_count: node_count as u64,
         edge_count: edge_count as u64,
+        current_observation_id: current.map(|value| value.2),
     })
 }
 
@@ -419,18 +890,27 @@ pub fn resolve_context(root: &Path, uri: &str) -> Result<ContextRef, String> {
 pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
     let connection = open(root)?;
     let project_id = crate::graph::project_id(root);
-    let Some((graph_id, graph_version, source_revision, truncated, omissions_json)) = connection
+    let Some((graph_id, graph_version, source_revision, source_fingerprint, observation_id, truncated, omissions_json)) = connection
         .query_row(
-            "SELECT graph_id, graph_version, source_revision, truncated, omissions_json
-             FROM graph_versions WHERE project_id = ?1 ORDER BY graph_version DESC LIMIT 1",
+            "SELECT graph.graph_id, graph.graph_version,
+                    CASE WHEN observation.dirty = 1 THEN observation.git_revision || '+dirty'
+                         ELSE observation.git_revision END,
+                    observation.source_fingerprint, observation.observation_id,
+                    graph.truncated, graph.omissions_json
+             FROM project_state state
+             JOIN graph_observations observation ON observation.observation_id = state.current_observation_id
+             JOIN graph_versions graph ON graph.graph_version = observation.graph_version
+             WHERE state.project_id = ?1",
             params![project_id],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
                 ))
             },
         )
@@ -458,7 +938,7 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         .map_err(|error| format!("Unable to decode source evidence: {error}"))?;
     let mut nodes = connection
         .prepare(
-            "SELECT node_id, kind, path, name, language FROM graph_nodes
+            "SELECT node_id, kind, path, name, language, evidence_fingerprint FROM graph_nodes
              WHERE graph_version = ?1 ORDER BY node_id",
         )
         .map_err(|error| format!("Unable to prepare node query: {error}"))?
@@ -469,6 +949,7 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
                 path: row.get(2)?,
                 name: row.get(3)?,
                 language: row.get(4)?,
+                evidence_fingerprint: row.get(5)?,
             })
         })
         .map_err(|error| format!("Unable to query graph nodes: {error}"))?
@@ -503,6 +984,8 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         graph_id,
         graph_version: graph_version as u64,
         source_revision,
+        source_fingerprint,
+        observation_id,
         files,
         nodes,
         edges,
@@ -558,8 +1041,13 @@ pub fn create_diagnostic_context(
         .ok_or_else(|| "Scan the repository before creating a Diagnostic Context.".to_string())?;
     if context.current_graph_basis.graph_id != current.graph_id
         || context.current_graph_basis.graph_version != current.graph_version
+        || context.current_graph_basis.source_revision != current.source_revision
+        || context.current_graph_basis.observation_id != current.observation_id
     {
-        return Err("Diagnostic Context current graph basis is not current.".to_string());
+        return Err(
+            "Diagnostic Context current graph basis, including source revision, is not current."
+                .to_string(),
+        );
     }
     let mut connection = open(root)?;
     let transaction = connection
@@ -886,8 +1374,49 @@ mod tests {
         assert_eq!(second.graph.graph_version, 2);
         assert_eq!(
             resolve_context(&root, &uri).expect("resolve").status,
-            "stale"
+            "current"
         );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn focused_symbol_and_direct_edge_changes_are_stale_but_unrelated_nodes_stay_current() {
+        let root = fixture_root();
+        fs::write(root.join("src/helper.ts"), "export const helper = 1;\n").expect("helper");
+        let (snapshot, facts) = graph::build(&root).expect("build");
+        let first = persist_scan(&root, snapshot, &facts).expect("persist");
+        let focused = first
+            .context_refs
+            .iter()
+            .find(|reference| {
+                first.graph.nodes.iter().any(|node| {
+                    node.id == reference.node_id
+                        && node.path.as_deref() == Some("src/main.ts")
+                        && node.kind == "file"
+                })
+            })
+            .expect("focused file")
+            .uri
+            .clone();
+        fs::write(
+            root.join("src/unrelated.ts"),
+            "export const unrelated = 1;\n",
+        )
+        .expect("unrelated");
+        let (snapshot, facts) = graph::build(&root).expect("unrelated graph");
+        persist_scan(&root, snapshot, &facts).expect("persist unrelated");
+        assert_eq!(
+            resolve_context(&root, &focused)
+                .expect("resolve unrelated")
+                .status,
+            "current"
+        );
+        fs::write(root.join("src/main.ts"), "export const main = 2;\n").expect("focused change");
+        let (snapshot, facts) = graph::build(&root).expect("focused graph");
+        persist_scan(&root, snapshot, &facts).expect("persist focused");
+        let resolved = resolve_context(&root, &focused).expect("resolve focused");
+        assert_eq!(resolved.status, "stale");
+        assert!(resolved.freshness_reason.contains("fingerprint"));
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -911,6 +1440,46 @@ mod tests {
             status(&root).expect("status").node_count,
             recovered.graph.nodes.len() as u64
         );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn context_ref_failure_rolls_back_graph_rows_observation_and_current_state() {
+        let root = fixture_root();
+        let (snapshot, facts) = graph::build(&root).expect("build");
+        let first = persist_scan(&root, snapshot, &facts).expect("first persist");
+        fs::write(root.join("src/other.ts"), "export const other = 2;\n").expect("change");
+        let (snapshot, facts) = graph::build(&root).expect("changed build");
+        let connection = open(&root).expect("open");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_context_ref BEFORE INSERT ON context_refs
+                 WHEN NEW.graph_version > 1
+                 BEGIN SELECT RAISE(ABORT, 'forced Context Ref failure'); END;",
+            )
+            .expect("trigger");
+        drop(connection);
+        assert!(persist_scan(&root, snapshot, &facts).is_err());
+        let connection = open(&root).expect("reopen");
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM graph_versions", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("graphs"),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM graph_observations", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("observations"),
+            1
+        );
+        assert_eq!(
+            status(&root).expect("status").current_graph_version,
+            Some(first.graph.graph_version)
+        );
+        drop(connection);
         fs::remove_dir_all(root).expect("cleanup");
     }
 

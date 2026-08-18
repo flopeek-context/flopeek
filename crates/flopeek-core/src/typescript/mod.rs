@@ -111,6 +111,9 @@ fn parse_tree(
         declarations,
         calls,
         unsupported,
+        canonical_fingerprint: blake3::hash(canonical_ast(root, source).as_bytes())
+            .to_hex()
+            .to_string(),
     })
 }
 
@@ -148,6 +151,9 @@ fn collect_declarations(
             kind: kind.to_string(),
             exported,
             position: position(node),
+            ast_fingerprint: blake3::hash(canonical_ast(node, source).as_bytes())
+                .to_hex()
+                .to_string(),
         });
     }
     if matches!(node.kind(), "lexical_declaration" | "export_statement") {
@@ -158,6 +164,31 @@ fn collect_declarations(
             }
         }
     }
+}
+
+fn canonical_ast(node: Node<'_>, source: &[u8]) -> String {
+    if node.kind() == "comment" {
+        return String::new();
+    }
+    let mut output = String::new();
+    output.push('(');
+    output.push_str(node.kind());
+    if node.child_count() == 0 {
+        if let Ok(text) = node.utf8_text(source) {
+            output.push(':');
+            output.push_str(text);
+        }
+    } else {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "comment" {
+                continue;
+            }
+            output.push_str(&canonical_ast(child, source));
+        }
+    }
+    output.push(')');
+    output
 }
 
 fn collect_calls(node: Node<'_>, source: &[u8], output: &mut Vec<TypeScriptCall>) {

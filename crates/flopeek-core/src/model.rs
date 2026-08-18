@@ -8,15 +8,16 @@ use serde::{Deserialize, Serialize};
 
 pub const PRODUCT_IDENTITY: &str = "flopeek-repository-memory";
 pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v1";
-pub const GRAPH_SCHEMA: &str = "flopeek-graph/v1";
-pub const CONTEXT_REF_SCHEMA: &str = "flopeek-context-ref/v1";
-pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v1";
-pub const STORE_SCHEMA: &str = "flopeek-sqlite/v1";
-pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v1";
-pub const DIAGNOSTIC_ASSERTION_SCHEMA: &str = "flopeek-diagnostic-assertion/v1";
-pub const HISTORICAL_CANDIDATE_SCHEMA: &str = "flopeek-historical-candidate/v1";
-pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v1";
-pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v1";
+pub const GRAPH_SCHEMA: &str = "flopeek-graph/v2";
+pub const CONTEXT_REF_SCHEMA: &str = "flopeek-context-ref/v2";
+pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v2";
+pub const STORE_SCHEMA: &str = "flopeek-sqlite/v2";
+pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v2";
+pub const DIAGNOSTIC_ASSERTION_SCHEMA: &str = "flopeek-diagnostic-assertion/v2";
+pub const HISTORICAL_CANDIDATE_SCHEMA: &str = "flopeek-historical-candidate/v2";
+pub const HISTORICAL_DIAGNOSIS_SCHEMA: &str = "flopeek-historical-diagnosis/v1";
+pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v2";
+pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -48,6 +49,8 @@ pub struct TypeScriptDeclaration {
     pub kind: String,
     pub exported: bool,
     pub position: SourcePosition,
+    #[serde(default)]
+    pub ast_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -68,6 +71,8 @@ pub struct TypeScriptFacts {
     pub declarations: Vec<TypeScriptDeclaration>,
     pub calls: Vec<TypeScriptCall>,
     pub unsupported: Vec<String>,
+    #[serde(default)]
+    pub canonical_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -78,6 +83,8 @@ pub struct GraphNode {
     pub path: Option<String>,
     pub name: Option<String>,
     pub language: Option<String>,
+    #[serde(default)]
+    pub evidence_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,6 +104,10 @@ pub struct GraphSnapshot {
     pub graph_id: String,
     pub graph_version: u64,
     pub source_revision: String,
+    #[serde(default)]
+    pub source_fingerprint: String,
+    #[serde(default)]
+    pub observation_id: String,
     pub files: Vec<SourceFile>,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
@@ -113,6 +124,20 @@ pub struct ContextRef {
     pub graph_version: u64,
     pub node_id: String,
     pub status: String,
+    #[serde(default)]
+    pub origin_observation_id: String,
+    #[serde(default)]
+    pub origin_source_revision: String,
+    #[serde(default)]
+    pub origin_fingerprint: String,
+    #[serde(default)]
+    pub fingerprint_scope: String,
+    #[serde(default)]
+    pub freshness_reason: String,
+    #[serde(default)]
+    pub origin_basis: Option<GraphBasis>,
+    #[serde(default)]
+    pub current_basis: Option<GraphBasis>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -125,6 +150,8 @@ pub struct StoreStatus {
     pub graph_count: u64,
     pub node_count: u64,
     pub edge_count: u64,
+    #[serde(default)]
+    pub current_observation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -170,6 +197,22 @@ pub struct GraphBasis {
     pub graph_id: String,
     pub graph_version: u64,
     pub source_revision: String,
+    #[serde(default)]
+    pub observation_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphObservation {
+    pub observation_id: String,
+    pub project_id: String,
+    pub graph_version: u64,
+    pub git_revision: String,
+    pub source_fingerprint: String,
+    pub source_manifest: Vec<SourceFile>,
+    pub dirty: bool,
+    pub observed_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

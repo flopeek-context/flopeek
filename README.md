@@ -30,10 +30,20 @@ cargo run -p flopeek-core -- serve
 ```
 
 `scan` discovers only `.ts` and `.tsx`, parses bounded structural facts with
-Tree-sitter, builds a deterministic graph, and commits evidence atomically to
-`.flopeek/flopeek.sqlite3`. Source bodies are never persisted. Context Refs
-carry project, graph, version, and node identity; an older reference resolves as
-`stale`, never silently as current.
+Tree-sitter, builds a deterministic structural graph, and commits evidence
+atomically to `.flopeek/flopeek.sqlite3`. Source bodies are never persisted.
+Graph IDs represent TypeScript structural evidence and do not change merely
+because the Git revision, whitespace, comments, or raw byte hash changed. Each
+source state is retained as an immutable graph observation with its exact
+source fingerprint and Git revision.
+
+Context Refs use node-level freshness. A reference is `current` when its
+canonical AST/evidence fingerprint and sorted direct-edge signatures still
+match; focused symbol, rename/removal, and direct import/call changes resolve
+as `stale` with an explicit reason. Legacy references use a conservative
+file-level fallback or resolve as `unresolved`. Resolution includes origin and
+current graph bases, observation IDs, fingerprint scope, and the deterministic
+freshness reason.
 
 Static evidence does not prove runtime behavior or root cause. Dynamic dispatch,
 reflection, generated source, and business intent remain explicitly unavailable.
@@ -42,13 +52,19 @@ Diagnostic Contexts, Assertions, and historical candidates are stored in the
 SQLite authority with explicit domain tables; they do not advance
 `graphVersion`.
 Immutable Git-revision graph snapshots used for adjacent comparisons are cached
-under `.flopeek/diagnostics/history/` and bounded by the diagnostic limits.
+under `.flopeek/diagnostics/history/`; cache identity includes revision,
+derivation, parser, path bound, and snapshot-byte bound, so a low-bound result
+cannot satisfy a later high-bound request. Historical diagnosis compares each
+non-root commit with its first parent (and roots with the empty tree), retains
+both sides of rename/copy records, and reports only bounded candidate changes.
+Dirty or source-mismatched history is explicitly `unavailable`; the packet can
+still return current static evidence. Candidates are never labeled causes.
 The JSONL service exposes `createDiagnosticContext`, `getDiagnosticContext`,
 `appendDiagnosticAssertion`, `diagnoseHistory`, and `getDiagnosticPacket` in
 addition to graph queries. Assertions retain their kind, actor, evidence class,
 and lifecycle separately from deterministic historical candidates. A historical
 packet reports the current graph basis, an explicit last-known-good revision,
-stale Context Refs, bounded candidates, omissions, and unresolved limitations.
+node freshness, bounded candidates, omissions, and unresolved limitations.
 
 ## Scope and provenance
 
