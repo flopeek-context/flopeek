@@ -68,6 +68,24 @@ Public or inherited `this` dispatch, `super`, computed members, mixins,
 getters/setters, callable fields, and other dynamic forms remain unresolved
 with deterministic reasons.
 
+Framework-neutral TypeScript context flows are also available from the root
+`package.json`. Literal `scripts`, `bin`, `main`, and `module` targets are
+bounded and resolved to known `.ts`/`.tsx` files; unsupported runners, shell
+composition, JavaScript output, declaration files, missing targets, and
+repository escapes remain explicit entry evidence. Each supported entry has a
+stable Flow Ref and a deterministic breadth-first static traversal that follows
+only proven `calls` and `constructs` edges, with cycle and byte/step bounds.
+The traversal is structural evidence, never execution order or a runtime claim.
+
+Related-test evidence is classified centrally: direct calls and constructions
+are strong, direct non-type-only imports are weak, and test-to-test, naming-only,
+transitive, and type-only relationships are excluded. JSONL exposes
+`listFlows`, `getFlow`, `resolveFlowRef`, and `getRelatedTests`; `scan` returns
+both node Context Refs and Flow Refs. Flow freshness compares entry identity,
+step fingerprints, traversed topology, and exact related-test records while
+keeping origin observation provenance immutable. The root manifest's exact
+fingerprint is stored only as bounded metadata, never its body or script text.
+
 Static evidence does not prove runtime behavior or root cause. Dynamic dispatch,
 reflection, generated source, and business intent remain explicitly unavailable.
 
@@ -87,7 +105,10 @@ The JSONL service exposes `createDiagnosticContext`, `getDiagnosticContext`,
 addition to graph queries. Assertions retain their kind, actor, evidence class,
 and lifecycle separately from deterministic historical candidates. A historical
 packet reports the current graph basis, an explicit last-known-good revision,
-node freshness, bounded candidates, omissions, and unresolved limitations.
+node and flow freshness, bounded candidates, related-test evidence, omissions,
+and unresolved limitations. Historical snapshots include bounded package
+manifest metadata so entry changes can be reported as candidates without
+claiming causality.
 
 ## Scope and provenance
 
