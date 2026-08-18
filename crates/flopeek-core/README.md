@@ -15,8 +15,10 @@ dispatch, require an LLM, or emit runtime/root-cause claims.
 
 Direct TypeScript import bindings are represented explicitly for named aliases,
 default imports, namespace imports, side-effect imports, and type-only imports.
-Only exact same-module or relative direct bindings create symbol-level call
-edges; relative lookup covers known extensions and directory indexes. Unresolved,
-ambiguous, external, dynamic, and re-export references are retained as bounded
-resolution evidence without guessing. Non-relative path aliases are unresolved
-until a later path-mapping capability is added.
+Symbol-level call edges also follow bounded local re-export/barrel chains and the
+root `tsconfig.json` `baseUrl`/`paths` subset, including local JSONC `extends`
+chains. Relative and mapped lookup covers known extensions and directory
+indexes. Unresolved, ambiguous, external, dynamic, type-only, cyclic, and
+invalid-config references remain bounded resolution evidence without guessing.
+Nested project configs, project references, package resolution, and package
+exports are explicitly unavailable.

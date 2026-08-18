@@ -46,13 +46,17 @@ current graph bases, observation IDs, fingerprint scope, and the deterministic
 freshness reason.
 
 TypeScript import evidence records named aliases, default imports, namespace
-imports, side-effect imports, and type-only imports. Direct calls resolve only
-through same-module declarations or an exact relative import binding. Relative
-lookup is deterministic across `.ts`, `.tsx`, `.d.ts`, and directory index files
-while repository escapes are rejected. Resolved edges point from the caller
-symbol to the callee symbol. Ambiguous, missing, external, dynamic,
-non-relative-alias, and re-export references remain explicit in bounded graph
-`resolution_evidence` records and are never guessed.
+imports, side-effect imports, and type-only imports. Direct calls resolve through
+same-module declarations, relative imports, bounded re-export/barrel chains, and
+the root `tsconfig.json` `baseUrl`/`paths` subset. Local `extends` chains accept
+JSONC and are bounded; nested project configs, project references, package
+resolution, and package exports remain unavailable. Relative and mapped lookup
+is deterministic across `.ts`, `.tsx`, `.d.ts`, and directory index files while
+repository escapes are rejected. Resolved edges point from the caller symbol to
+the callee symbol. Ambiguous, missing, external, dynamic, type-only, cyclic,
+invalid-config, and unsupported module references remain explicit in bounded
+graph `resolution_evidence` records and are never guessed. Each observation
+retains config path/hash provenance without storing config bodies.
 
 Static evidence does not prove runtime behavior or root cause. Dynamic dispatch,
 reflection, generated source, and business intent remain explicitly unavailable.
