@@ -82,6 +82,14 @@ pub fn build_packet(
         .iter()
         .map(|node| node.id.as_str())
         .collect::<BTreeSet<_>>();
+    let mut context_reconciliation = Vec::new();
+    for uri in context
+        .focus_context_refs
+        .iter()
+        .take(limits.max_context_refs)
+    {
+        context_reconciliation.push(store::reconcile_context(root, uri)?);
+    }
     related_tests.records.extend(
         graph
             .related_test_evidence
@@ -133,7 +141,8 @@ pub fn build_packet(
         || focus_context_refs.len() < context.focus_context_refs.len()
         || focus_flow_refs.len() < context.focus_flow_refs.len()
         || assertions.len() < assertion_total
-        || related_tests.truncated;
+        || related_tests.truncated
+        || context_reconciliation.iter().any(|item| item.truncated);
     let mut packet = DiagnosticPacket {
         schema_version: DIAGNOSTIC_PACKET_SCHEMA.to_string(),
         current_graph_basis: current_basis.clone(),
@@ -143,6 +152,7 @@ pub fn build_packet(
         focus_nodes,
         focus_flows,
         related_tests,
+        context_reconciliation,
         assertions,
         historical,
         context,
@@ -188,6 +198,10 @@ pub(super) fn trim_packet(packet: &mut DiagnosticPacket, max_bytes: usize) -> Re
             packet
                 .omissions
                 .push("related-test evidence omitted by packet bound".to_string());
+        } else if packet.context_reconciliation.pop().is_some() {
+            packet
+                .omissions
+                .push("Context Ref reconciliation omitted by packet bound".to_string());
         } else if packet.focus_flow_refs.pop().is_some() {
             packet
                 .omissions

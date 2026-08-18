@@ -45,6 +45,21 @@ file-level fallback or resolve as `unresolved`. Resolution includes origin and
 current graph bases, observation IDs, fingerprint scope, and the deterministic
 freshness reason.
 
+Each scan also records an immutable observation event. Repeated scans of the
+same observation are idempotent; a later scan is linked with `observed-after`,
+which describes local observation order rather than Git ancestry or runtime
+execution. `getObservationContinuity` returns a bounded chain and explicitly
+reports structural-graph changes, truncation, omissions, and limitations.
+
+Context reconciliation is read-only and conservative. When an origin node is
+missing, exactly one current canonical ref with the same node kind, fingerprint
+scope, fingerprint contract, and fingerprint may resolve as `superseded`;
+ambiguous, missing, legacy, or corrupted evidence remains `stale`, `unresolved`,
+or `unavailable` with a deterministic reason. This does not claim semantic
+renames, runtime equivalence, or business intent. `reconcileContextRef` exposes
+the bounded candidate evidence and evaluation event without storing guessed
+mappings.
+
 TypeScript import evidence records named aliases, default imports, namespace
 imports, side-effect imports, and type-only imports. Direct calls resolve through
 same-module declarations, relative imports, bounded re-export/barrel chains, and

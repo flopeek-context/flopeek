@@ -56,6 +56,9 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             "flowEvidenceBasis": "root-package-manifest-and-static-call-projection",
             "flowFreshness": "entry-step-evidence-and-traversed-edges",
             "relatedTestEvidence": "direct-call-construct-or-import",
+            "observationContinuity": "immutable-scan-event-chain",
+            "contextReconciliation": "unique-exact-compatible-fingerprint",
+            "automaticSupersession": "exact-single-candidate-only",
         })),
         "scan" => {
             let root = project_root(params)?;
@@ -84,6 +87,25 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| "resolveContextRef requires params.uri.".to_string())?;
             serde_json::to_value(store::resolve_context(&root, uri)?)
+                .map_err(|error| error.to_string())
+        }
+        "getObservationContinuity" => {
+            let root = project_root(params)?;
+            let max_events = params
+                .get("maxEvents")
+                .and_then(Value::as_u64)
+                .unwrap_or(128)
+                .min(usize::MAX as u64) as usize;
+            serde_json::to_value(store::get_observation_continuity(&root, max_events)?)
+                .map_err(|error| error.to_string())
+        }
+        "reconcileContextRef" => {
+            let root = project_root(params)?;
+            let uri = params
+                .get("uri")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "reconcileContextRef requires params.uri.".to_string())?;
+            serde_json::to_value(store::reconcile_context(&root, uri)?)
                 .map_err(|error| error.to_string())
         }
         "listFlows" => {

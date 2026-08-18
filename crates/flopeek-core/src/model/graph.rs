@@ -73,11 +73,17 @@ pub struct ContextRef {
     #[serde(default)]
     pub fingerprint_scope: String,
     #[serde(default)]
+    pub fingerprint_contract: String,
+    #[serde(default)]
     pub freshness_reason: String,
     #[serde(default)]
     pub origin_basis: Option<GraphBasis>,
     #[serde(default)]
     pub current_basis: Option<GraphBasis>,
+    #[serde(default)]
+    pub current_event_id: String,
+    #[serde(default)]
+    pub successor_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -55,6 +55,14 @@ fn jsonl_health_is_rust_only_and_deterministic() {
     assert_eq!(response["result"]["core"], "rust");
     assert_eq!(response["result"]["analyzedLanguages"][0], "typescript");
     assert_eq!(response["result"]["diagnosticMetadataAuthority"], "sqlite");
+    assert_eq!(
+        response["result"]["observationContinuity"],
+        "immutable-scan-event-chain"
+    );
+    assert_eq!(
+        response["result"]["automaticSupersession"],
+        "exact-single-candidate-only"
+    );
 }
 
 #[test]
@@ -151,11 +159,21 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
         ),
         jsonl_request(
             8,
+            "getObservationContinuity",
+            json!({"projectRoot": root.to_string_lossy(), "maxEvents": 0}),
+        ),
+        jsonl_request(
+            9,
+            "reconcileContextRef",
+            json!({"projectRoot": root.to_string_lossy(), "uri": node_uri}),
+        ),
+        jsonl_request(
+            10,
             "getNode",
             json!({"projectRoot": root.to_string_lossy(), "nodeId": node_id}),
         ),
         jsonl_request(
-            9,
+            11,
             "createDiagnosticContext",
             json!({"projectRoot": root.to_string_lossy(), "context": context}),
         ),
@@ -169,7 +187,7 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("response json"))
         .collect::<Vec<_>>();
-    assert_eq!(responses.len(), 8);
+    assert_eq!(responses.len(), 10);
     assert!(responses.iter().all(|response| response["ok"] == true));
     assert_eq!(
         responses[2]["result"]["flowId"],
@@ -177,8 +195,18 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
     );
     assert_eq!(responses[4]["result"]["status"], "current");
     assert_eq!(responses[5]["result"]["status"], "current");
-    assert_eq!(responses[6]["result"]["node"]["id"], node_id);
-    let context_id = responses[7]["result"]["id"]
+    assert_eq!(
+        responses[6]["result"]["schemaVersion"],
+        "flopeek-observation-continuity/v1"
+    );
+    assert_eq!(responses[6]["result"]["truncated"], true);
+    assert_eq!(
+        responses[7]["result"]["schemaVersion"],
+        "flopeek-context-reconciliation/v1"
+    );
+    assert_eq!(responses[7]["result"]["status"], "current");
+    assert_eq!(responses[8]["result"]["node"]["id"], node_id);
+    let context_id = responses[9]["result"]["id"]
         .as_str()
         .expect("context id")
         .to_string();
@@ -210,6 +238,12 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
     );
     assert_eq!(
         diagnosis_responses[1]["result"]["focusFlowRefs"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        diagnosis_responses[1]["result"]["contextReconciliation"]
             .as_array()
             .map(Vec::len),
         Some(1)

@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ContextFlow, ContextRef, EntryEvidence, EntryManifest, FlowRef, GraphEdge, GraphNode,
-    ModuleResolutionBasis, ModuleResolutionConfigFile, RelatedTestEvidence, ResolutionEvidence,
-    SourceFile,
+    ContextFlow, ContextReconciliation, ContextRef, EntryEvidence, EntryManifest, FlowRef,
+    GraphEdge, GraphNode, ModuleResolutionBasis, ModuleResolutionConfigFile, RelatedTestEvidence,
+    ResolutionEvidence, SourceFile,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -213,6 +213,8 @@ pub struct DiagnosticPacket {
     pub focus_flows: Vec<ContextFlow>,
     #[serde(default)]
     pub related_tests: RelatedTestEvidence,
+    #[serde(default)]
+    pub context_reconciliation: Vec<ContextReconciliation>,
     pub assertions: Vec<DiagnosticAssertion>,
     pub historical: HistoricalDiagnosis,
     pub limitations: Vec<String>,

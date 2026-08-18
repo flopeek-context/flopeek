@@ -55,10 +55,8 @@ pub fn assign_node_fingerprints(
             let mut declaration_fingerprints = declaration_fingerprints;
             declaration_fingerprints.sort();
             format!(
-                "symbol\0{}\0{}\0{}\0exported={exported}\0ast={}",
+                "symbol\0{}\0exported={exported}\0ast={}",
                 node.kind,
-                node.path.as_deref().unwrap_or_default(),
-                node.id,
                 declaration_fingerprints.join("|")
             )
         };
@@ -79,6 +77,9 @@ pub fn assign_node_fingerprints(
         let mut signatures = edges
             .iter()
             .filter_map(|edge| {
+                if edge.kind == "declares" {
+                    return None;
+                }
                 if edge.from == node.id {
                     Some(format!(
                         "out\0{}\0{}\0{}",

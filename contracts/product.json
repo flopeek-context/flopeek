@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "flopeek-product-contract/v2",
+  "schemaVersion": "flopeek-product-contract/v3",
   "canonicalRepository": "flopeek-context/flopeek",
   "coreImplementation": "rust",
   "persistedAuthority": "sqlite",
@@ -14,6 +14,9 @@
   "flowEvidenceBasis": "root-package-manifest-and-static-call-projection",
   "flowFreshness": "entry-step-evidence-and-traversed-edges",
   "relatedTestEvidence": "direct-call-construct-or-import",
+  "observationContinuity": "immutable-scan-event-chain",
+  "contextReconciliation": "unique-exact-compatible-fingerprint",
+  "automaticSupersession": "exact-single-candidate-only",
   "normalCi": [
     "cargo fmt --all --check",
     "cargo clippy --workspace --all-targets -- -D warnings",
