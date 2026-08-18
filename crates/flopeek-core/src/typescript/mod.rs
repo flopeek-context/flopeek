@@ -11,7 +11,7 @@ use crate::model::{
 use std::path::Path;
 use tree_sitter::{Node, Parser, Tree};
 
-pub const PARSER_IDENTITY: &str = "tree-sitter-typescript/0.23";
+pub const PARSER_IDENTITY: &str = "tree-sitter-typescript/0.23.2";
 
 pub fn parse(path: &str, source: &[u8], source_hash: &str) -> Result<TypeScriptFacts, String> {
     let language = language_for_path(Path::new(path))
@@ -278,6 +278,7 @@ mod tests {
         )
         .expect("parse TypeScript");
         assert_eq!(ts.language, "typescript");
+        assert_eq!(ts.parser, PARSER_IDENTITY);
         assert_eq!(ts.imports[0].specifier, "./payments");
         assert_eq!(ts.declarations[0].name, "checkout");
         assert_eq!(ts.calls[0].callee.as_deref(), Some("charge"));

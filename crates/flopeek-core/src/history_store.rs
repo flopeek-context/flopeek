@@ -177,3 +177,66 @@ fn atomic_write(path: &Path, payload: &[u8]) -> Result<(), String> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_parser_identity_is_part_of_the_history_cache_namespace() {
+        let root =
+            std::env::temp_dir().join(format!("flopeek-history-store-test-{}", std::process::id()));
+        if root.exists() {
+            fs::remove_dir_all(&root).expect("remove stale test root");
+        }
+        fs::create_dir_all(&root).expect("test root");
+        let snapshot = HistoricalSnapshot {
+            schema_version: HISTORICAL_SNAPSHOT_SCHEMA.to_string(),
+            project_id: crate::graph::project_id(&root),
+            source_revision: "a".repeat(40),
+            files: Vec::new(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            truncated: false,
+            omissions: Vec::new(),
+        };
+        let derivation = "typescript-historical-delta-v2";
+        let old_parser = "tree-sitter-typescript-0.23.2";
+        save_with_key(&root, &snapshot, derivation, old_parser, 10, 1024)
+            .expect("save old parser namespace");
+        assert!(
+            load_with_key(
+                &root,
+                &snapshot.source_revision,
+                derivation,
+                crate::typescript::PARSER_IDENTITY,
+                10,
+                1024,
+            )
+            .expect("load exact parser namespace before migration")
+            .is_none()
+        );
+        save_with_key(
+            &root,
+            &snapshot,
+            derivation,
+            crate::typescript::PARSER_IDENTITY,
+            10,
+            1024,
+        )
+        .expect("save exact parser namespace");
+        assert!(
+            load_with_key(
+                &root,
+                &snapshot.source_revision,
+                derivation,
+                crate::typescript::PARSER_IDENTITY,
+                10,
+                1024,
+            )
+            .expect("load exact parser namespace")
+            .is_some()
+        );
+        fs::remove_dir_all(&root).expect("cleanup test root");
+    }
+}
