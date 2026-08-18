@@ -15,13 +15,18 @@ const support = read("SUPPORT.md");
 const roadmap = read("ROADMAP.md");
 const architecture = read("ARCHITECTURE.md");
 const releasing = read("RELEASING.md");
+const product = read("PRODUCT.md");
 
 if (packageJson.license !== "Apache-2.0") failures.push("package.json must declare Apache-2.0.");
 if (!fs.existsSync(path.join(root, "LICENSE"))) failures.push("LICENSE must exist.");
-requireMatch(releasing, /`main` is the only long-lived public source branch/, "public main release contract");
-requireMatch(releasing, /Private overlay boundary/, "private overlay release boundary");
-requireMatch(support, /The public `main` branch is the canonical Flopeek Core source/, "canonical public Core support statement");
-requireMatch(architecture, /Public Core releases are created from immutable tags on `main`/, "tagged public Core architecture statement");
+requireMatch(releasing, /Public release is intentionally disabled while canonical publication authority\s+is pending/, "pending canonical-publication release block");
+requireMatch(releasing, /must not reuse the imported records/, "legacy approval quarantine");
+requireMatch(support, /Public package and GitHub release promotion are blocked until canonical publication authority is explicitly approved/, "support release block");
+requireMatch(architecture, /Imported release automation is disabled until canonical publication authority\s+is explicitly approved/, "architecture release block");
+for (const [name, source] of [["PRODUCT.md", product], ["ROADMAP.md", roadmap], ["ARCHITECTURE.md", architecture], ["SUPPORT.md", support]]) {
+  requireMatch(source, /AGENTS\.md/, `${name} AGENTS.md authority reference`);
+}
+rejectMatch(`${product}\n${support}\n${roadmap}\n${architecture}`, /canonical definition of \*\*what Flopeek|single prioritized roadmap for building Flopeek|canonical human-readable statement/, "parallel human-readable authority claim");
 rejectMatch(`${support}\n${roadmap}\n${architecture}`, /private development source of truth|private-development to public-source projection|public repository creation, visibility change/i, "retired private-to-public source model");
 rejectMatch(`${support}\n${roadmap}\n${architecture}`, /export:public-repository|audit:public-repository|public-snapshot\.yml/, "retired public snapshot tooling");
 requireMatch(support, /fixture gate reports 40\/40 expected relationships/, "current fixture corpus total");

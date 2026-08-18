@@ -1,20 +1,23 @@
 # Flopeek product contract
 
-> **Use this document to judge scope and product decisions.** For installation and daily use, start with the [user guide](docs/using-flopeek.md). For exact parser coverage, use [SUPPORT.md](SUPPORT.md).
+> **Legacy product reference:** use [AGENTS.md](AGENTS.md) to judge current
+> scope and product decisions. For installation and daily use, start with the
+> [user guide](docs/using-flopeek.md).
 
 ## Document authority
 
-This document is the canonical definition of **what Flopeek is, who it serves, which problems it solves, and which product rules must remain true while it evolves**.
+This document records the inherited product contract and is non-authoritative
+where it differs from AGENTS.md.
 
 It is intentionally separate from the delivery roadmap:
 
-- [PRODUCT.md](PRODUCT.md) defines the stable product contract.
-- [ROADMAP.md](ROADMAP.md) is the single prioritized Agile delivery roadmap.
+- [AGENTS.md](AGENTS.md) is the single human-readable authority.
+- [PRODUCT.md](PRODUCT.md) and [ROADMAP.md](ROADMAP.md) retain historical context.
 - [ARCHITECTURE.md](ARCHITECTURE.md) describes the current implementation and target technical design.
 - [SUPPORT.md](SUPPORT.md) states exactly which languages, frameworks, and relationships are supported.
 - [BENCHMARKS.md](BENCHMARKS.md) records reproducible performance and audited relationship evidence.
 
-If another document conflicts with this product contract, resolve the conflict explicitly. Do not silently change the product through an implementation detail.
+If this document conflicts with AGENTS.md, stop and follow AGENTS.md.
 
 ## Status vocabulary
 

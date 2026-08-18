@@ -42,10 +42,13 @@ reduces repeated long ID storage without changing the Flopeek graph contract.
 
 ## Generated product contract
 
-- Source candidate: `flopeek@0.2.1-beta.4` on npm channel `beta`.
+- Canonical publication: `blocked` pending explicit approval for `flopeek@0.2.1-beta.4`.
+- Repository authority: `flopeek-context/flopeek`; Flopeek product identity is preserved.
+- V1 repository-truth authority: rust with sqlite; target languages are typescript/tsx.
+- LLM required: `false`; JavaScript repository authority: `false`; historical output is `candidate-not-cause`.
 - Last verified preview artifact: `flopeek@0.2.1-beta.3` (`passed`).
 - Runtime: Node.js 22 or later (`>=22`).
-- Public default core: `js` / javascript.
+- Legacy current default core: `js` / javascript; Rust authority cutover is `pending`.
 - Experimental native core: `native-experimental`; rollout is `incomplete` and native-default eligibility is `false`.
 - Release approvals: npm `not-approved`; GitHub Release `not-approved`.
 - JavaScript/default adapters: csharp (csharp; toolchain-conditional; .NET SDK), go (go; toolchain-conditional; Go toolchain), inventory (assembly/astro/c/cpp/headers/kotlin/makefile/ruby/scala/shell/swift/vue; inventory-only), java (java; bundled), php (php; bundled), python (python; bundled), rust (rust; bundled), svelte (svelte; bundled), typescript (javascript/jsx/tsx/typescript; bundled).

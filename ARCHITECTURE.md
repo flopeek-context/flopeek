@@ -4,11 +4,13 @@
 
 ## Document authority
 
-This document describes **how Flopeek currently works, which technical invariants it must preserve, and the target architecture required by the product contract**.
+This is a legacy/current implementation reference subordinate to
+[AGENTS.md](AGENTS.md), the single human-readable authority for product scope,
+architecture, priorities, and agent behavior.
 
-- [PRODUCT.md](PRODUCT.md) is authoritative for product scope and trust rules.
-- [ROADMAP.md](ROADMAP.md) is authoritative for delivery order and status.
-- [SUPPORT.md](SUPPORT.md) is authoritative for supported parser behavior.
+- [PRODUCT.md](PRODUCT.md), [ROADMAP.md](ROADMAP.md), and
+  [SUPPORT.md](SUPPORT.md) are non-authoritative historical or generated
+  references.
 
 Sections are labeled `current`, `target`, or `decision required`. A target design is not an implemented capability.
 
@@ -60,10 +62,13 @@ Status: `current`
 
 #### Generated product contract
 
-- Source candidate: `flopeek@0.2.1-beta.4` on npm channel `beta`.
+- Canonical publication: `blocked` pending explicit approval for `flopeek@0.2.1-beta.4`.
+- Repository authority: `flopeek-context/flopeek`; Flopeek product identity is preserved.
+- V1 repository-truth authority: rust with sqlite; target languages are typescript/tsx.
+- LLM required: `false`; JavaScript repository authority: `false`; historical output is `candidate-not-cause`.
 - Last verified preview artifact: `flopeek@0.2.1-beta.3` (`passed`).
 - Runtime: Node.js 22 or later (`>=22`).
-- Public default core: `js` / javascript.
+- Legacy current default core: `js` / javascript; Rust authority cutover is `pending`.
 - Experimental native core: `native-experimental`; rollout is `incomplete` and native-default eligibility is `false`.
 - Release approvals: npm `not-approved`; GitHub Release `not-approved`.
 
@@ -76,20 +81,16 @@ This block is generated from repository contracts; edit the source contracts and
 - Source is currently distributed directly; there is no build step.
 - `package.json#files` and `packaging/package-policy.json` bound the candidate tarball to runtime modules, Viewer assets, the Flopeek integration skill, showcase, and public benchmark data. Repository governance, tests, CI, caches, credentials, logs, and source maps are rejected by the package audit.
 - `scripts/verify-clean-room.js` packs and installs the exact source tarball into an operating-system temporary consumer with lifecycle scripts disabled, then checks the installed binary, bounded static scan, MCP bootstrap, fixture immutability, and cleanup.
-- The source repository is public. npm registry publishing remains intentionally separate from a source tag or GitHub Release; packaging evidence does not decide registry permission or release stage.
-- `main` is the only long-lived public source branch. CI validates short-lived
+- This is an independent repository created from an immutable source snapshot; the imported repository is historical provenance rather than a live parent.
+- `main` is the protected baseline branch. CI validates short-lived
   `<type>/<change-name>` SDLC branch names and rejects tool, vendor, account, or
   agent identity prefixes before running the remaining source and package gates.
-- Public Core releases are created from immutable tags on `main` only after the
-  source-owned GitHub release approval validates the SHA-256 digest of an exact
-  release manifest. That manifest binds the main tarball, rollout-evidence
-  bytes, every native platform tarball, and every native binary digest to the
-  tag/package/source identity. Outside alpha, the published npm dist-tag is
-  validated as well. The approval record is an owner attestation with evidence
-  references, not an
-  automated proof of human/provider independence. A separate private overlay
-  consumes those tagged Core versions and must not copy Core source or become a
-  second Core source of truth.
+- Imported release automation is disabled until canonical publication authority
+  is explicitly approved.
+  The package is private, has no publication configuration, and the remaining
+  historical approval and rollout records are non-authoritative. Flopeek
+  identity is preserved; canonical destinations, credentials, provenance, and
+  new repository-specific approvals are required before publication.
 
 ### Main modules
 

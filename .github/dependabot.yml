@@ -4,7 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Phase 0: disable routine version-update PRs while preserving security updates.
+    open-pull-requests-limit: 0
     labels:
       - dependencies
       - ci
@@ -12,7 +13,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Phase 0: disable routine version-update PRs while preserving security updates.
+    open-pull-requests-limit: 0
     labels:
       - dependencies
       - npm
@@ -20,7 +22,8 @@ updates:
     directory: /native/flopeek-core
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Phase 0: disable routine version-update PRs while preserving security updates.
+    open-pull-requests-limit: 0
     labels:
       - dependencies
       - rust

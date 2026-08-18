@@ -41,7 +41,7 @@ test("public Core CI separates quality, compatibility, native platform, and pack
   assert.match(workflow, /uses: EmbarkStudios\/cargo-deny-action@[a-f0-9]{40}[\s\S]*manifest-path: native\/flopeek-core\/Cargo\.toml[\s\S]*command-arguments: advisories bans licenses sources/);
   assert.match(workflow, /uses: google\/osv-scanner-action\/osv-scanner-action@[a-f0-9]{40}[\s\S]*--lockfile=package-lock\.json[\s\S]*--lockfile=native\/flopeek-core\/Cargo\.lock/);
   assert.match(publicSourceRunner, /lanes\["public-source"\]\.unshift\("test\/unit\/native-inventory-parity\.test\.js"\)/);
-  for (const command of ["npm run verify:toolchains", "cargo fmt --check --manifest-path native/flopeek-core/Cargo.toml", "cargo clippy --locked --manifest-path native/flopeek-core/Cargo.toml -- -D warnings", "cargo test --locked --manifest-path native/flopeek-core/Cargo.toml", "npm run verify:native-js-parser-parity", "npm run test:unit", "npm run test:contracts", "node scripts/verify-branch-name.js", "npm run verify:core-baseline", "npm run test:native-platform", "npm run test:package", "npm run audit:package", "npm run verify:clean-room"]) {
+  for (const command of ["npm run verify:toolchains", "cargo fmt --check --manifest-path native/flopeek-core/Cargo.toml", "cargo clippy --locked --manifest-path native/flopeek-core/Cargo.toml -- -D warnings", "cargo test --locked --manifest-path native/flopeek-core/Cargo.toml", "npm run verify:native-js-parser-parity", "npm run test:unit", "npm run test:contracts", "node scripts/verify-branch-name.js", "npm run verify:core-baseline", "npm run verify:import-safety", "npm run test:native-platform", "npm run test:package", "npm run audit:package", "npm run verify:clean-room"]) {
     assert.match(workflow, new RegExp(`- run: ${command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   }
   assert.equal((workflow.match(/cargo fmt --check --manifest-path/g) || []).length, 1);
@@ -59,6 +59,7 @@ test("dependency automation covers npm and Cargo without auto-merge", () => {
   const dependabot = fs.readFileSync(path.join(ROOT, ".github", "dependabot.yml"), "utf8");
   assert.match(dependabot, /package-ecosystem: npm[\s\S]*directory: \//);
   assert.match(dependabot, /package-ecosystem: cargo[\s\S]*directory: \/native\/flopeek-core/);
+  assert.equal((dependabot.match(/open-pull-requests-limit:\s*0/g) || []).length, 3);
   assert.doesNotMatch(dependabot, /auto-merge|automerge/iu);
 
   const deny = fs.readFileSync(path.join(ROOT, "deny.toml"), "utf8");
@@ -109,25 +110,12 @@ test("native dogfood workflow accumulates only exact revision-bound UTC days", (
   assertThirdPartyActionsPinned(workflow);
 });
 
-test("promotion workflow consumes a cross-run candidate behind protected environments without rebuilding", () => {
+test("legacy promotion workflow is read-only and cannot publish or release", () => {
   const workflow = readWorkflow("native-promotion.yml");
   assert.match(workflow, /workflow_dispatch:/);
-  for (const input of ["candidate_run_id", "release_manifest_sha256", "release_channel", "dry_run"]) {
-    assert.match(workflow, new RegExp(`\\n\\s{6}${input}:`));
-  }
-  assert.match(workflow, /environment: \$\{\{ inputs\.dry_run && 'native-release-promotion-dry-run' \|\| 'native-release-promotion' \}\}/);
-  assert.match(workflow, /uses: actions\/download-artifact@[a-f0-9]{40}[^\n]*[\s\S]*github-token: \$\{\{ github\.token \}\}[\s\S]*run-id: \$\{\{ inputs\.candidate_run_id \}\}/);
-  assert.match(workflow, /--expected-manifest-sha256 "\$\{\{ inputs\.release_manifest_sha256 \}\}"/);
-  assert.match(workflow, /actions\/runs\/\$\{\{ inputs\.candidate_run_id \}\}/);
-  assert.match(workflow, /run\.path -ne '\.github\/workflows\/native-candidate\.yml'/);
-  assert.match(workflow, /run\.conclusion -ne 'success'/);
-  assert.match(workflow, /verify-native-candidate-install\.js/);
-  assert.match(workflow, /publish-npm-release-set\.js --assets candidate-bundle/);
-  assert.match(workflow, /verify-native-registry-release\.js/);
-  assert.match(workflow, /generate-native-promotion-attestation\.js/);
-  assert.match(workflow, /gh release create/);
-  assert.doesNotMatch(workflow, /cargo (?:build|run)|npm pack/);
-  assert.doesNotMatch(workflow, /packaging\/github-release-approval\.json|continue-on-error|\|\|\s*true/);
+  assert.match(workflow, /permissions:\s*\n\s+contents: read/);
+  assert.match(workflow, /node scripts\/verify-import-safety\.js/);
+  assert.doesNotMatch(workflow, /npm publish|npm dist-tag add|git push|gh release (?:create|upload)/);
   assert.doesNotMatch(workflow, /id-token:\s*write/);
   assertThirdPartyActionsPinned(workflow);
 });

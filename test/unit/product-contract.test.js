@@ -22,8 +22,19 @@ test("product contract is derived from package, rollout, approval, mode, and ada
   const contract = buildProductContractFromInputs(inputs());
   assert.equal(contract.package.sourceVersion, require("../../package.json").version);
   assert.equal(contract.package.minimumNodeMajor, 22);
+  assert.equal(contract.package.publicationState, "blocked-pending-canonical-approval");
+  assert.equal(contract.package.distTag, null);
+  assert.equal(contract.authority.canonicalRepository, "flopeek-context/flopeek");
+  assert.equal(contract.authority.coreImplementation, "rust");
+  assert.equal(contract.authority.persistedAuthority, "sqlite");
+  assert.deepEqual(contract.authority.primaryDiagnosticLanguages, ["typescript", "tsx"]);
+  assert.equal(contract.authority.llmRequired, false);
+  assert.equal(contract.authority.javascriptRepositoryAuthority, false);
+  assert.equal(contract.authority.automaticRootCauseClaims, false);
+  assert.equal(contract.authority.historicalOutputClass, "candidate-not-cause");
   assert.equal(contract.core.publicDefaultImplementation, "javascript");
   assert.equal(contract.core.experimentalImplementation, "native");
+  assert.equal(contract.core.authorityCutoverStatus, "pending");
   assert.equal(contract.core.nativeRolloutStatus, "incomplete");
   assert.equal(contract.core.nativeDefaultEligible, false);
   assert.ok(contract.adapters.native.some((adapter) => adapter.id === "go"));
@@ -36,6 +47,9 @@ test("product contract rejects source-version and Node-minimum contradictions", 
   const nodeMismatch = inputs();
   nodeMismatch.packagePolicy.package.minimumNodeMajor = 20;
   assert.throws(() => buildProductContractFromInputs(nodeMismatch), /Node minimum differs/);
+  const unsafePublication = inputs();
+  unsafePublication.packageJson.private = false;
+  assert.throws(() => buildProductContractFromInputs(unsafePublication), /Pending canonical publication approval requires/);
 });
 
 test("a complete evidence packet with a negative native gate remains non-eligible", () => {

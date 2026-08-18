@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "repository-engineering-memory-provenance/v1",
+  "sourceBaseline": {
+    "repository": "badsleepyday/flopeek-core",
+    "branch": "development",
+    "commit": "72a95fe1a6497683e96e90872438cd3c83b7272f",
+    "date": "2026-08-09",
+    "role": "initial-source-snapshot-only"
+  },
+  "repositoryRelationship": "independent-product-line",
+  "upstreamSync": "prohibited-without-explicit-adoption-record",
+  "canonicalRepository": {
+    "repository": "flopeek-context/flopeek",
+    "role": "sole-active-repository-authority"
+  },
+  "productIdentity": {
+    "status": "preserved",
+    "product": "Flopeek",
+    "package": "flopeek",
+    "cli": "flopeek",
+    "metadataDirectory": ".flopeek",
+    "contextRefScheme": "fp"
+  },
+  "publicationAuthority": {
+    "status": "pending",
+    "npmPublication": "blocked",
+    "githubRelease": "blocked",
+    "historicalApprovals": "non-authoritative"
+  }
+}

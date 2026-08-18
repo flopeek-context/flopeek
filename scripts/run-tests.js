@@ -51,6 +51,7 @@ for (const name of ["full", "fast", "unit"]) lanes[name].unshift("test/unit/chil
 for (const name of ["full", "fast", "unit"]) lanes[name].unshift("test/unit/monorepo-package-benchmark.test.js");
 for (const name of ["full", "fast", "unit"]) lanes[name].unshift("test/unit/framework-command-flow.test.js");
 for (const name of ["full", "fast", "unit"]) lanes[name].unshift("test/unit/public-core-ci.test.js");
+for (const name of ["full", "fast", "unit", "package"]) lanes[name].unshift("test/unit/import-safety.test.js");
 for (const name of ["full", "fast", "unit", "package"]) lanes[name].unshift("test/unit/native-release-controls.test.js");
 for (const name of ["full", "fast", "unit", "package"]) lanes[name].unshift(
   "test/unit/native-candidate-bundle.test.js",

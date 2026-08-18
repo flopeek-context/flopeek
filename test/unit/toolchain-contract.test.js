@@ -22,7 +22,7 @@ function executor(overrides = {}) {
   return (command) => overrides[command] ?? exact[command];
 }
 
-test("toolchain contracts are exact and use bounded roll-forward", () => {
+test("toolchain contracts are exact and disable .NET roll-forward", () => {
   assert.deepEqual(rustContract(ROOT), {
     channel: "1.97.0",
     profile: "minimal",
@@ -30,7 +30,7 @@ test("toolchain contracts are exact and use bounded roll-forward", () => {
   });
   assert.deepEqual(dotnetContract(ROOT), {
     version: "10.0.302",
-    rollForward: "latestPatch",
+    rollForward: "disable",
     allowPrerelease: false,
   });
   assert.deepEqual(goContract(ROOT), { version: "go1.26.4" });
@@ -51,7 +51,7 @@ test("toolchain verification rejects Rust, .NET, Go, and Node drift", () => {
     /Go toolchain does not match/u,
   );
   assert.throws(
-    () => verifyToolchains({ root: ROOT, execFileSync: executor({ node: "v24.1.0\n" }) }),
-    /outside the frozen 20\/22/u,
+    () => verifyToolchains({ root: ROOT, execFileSync: executor({ node: "v20.20.0\n" }) }),
+    /outside the frozen 22\/24/u,
   );
 });

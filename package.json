@@ -1,7 +1,7 @@
 {
   "name": "flopeek",
   "version": "0.2.1-beta.4",
-  "private": false,
+  "private": true,
   "license": "Apache-2.0",
   "description": "Versioned change context for developers and coding agents.",
   "keywords": [
@@ -11,21 +11,17 @@
     "mcp",
     "static-analysis"
   ],
-  "homepage": "https://github.com/badsleepyday/flopeek-core#readme",
+  "homepage": "https://github.com/flopeek-context/flopeek#readme",
   "bugs": {
-    "url": "https://github.com/badsleepyday/flopeek-core/issues"
+    "url": "https://github.com/flopeek-context/flopeek/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/badsleepyday/flopeek-core.git"
+    "url": "git+https://github.com/flopeek-context/flopeek.git"
   },
   "type": "commonjs",
   "bin": {
     "flopeek": "src/cli.js"
-  },
-  "publishConfig": {
-    "access": "public",
-    "tag": "beta"
   },
   "files": [
     "ARCHITECTURE.md",
@@ -89,7 +85,8 @@
     "audit:package": "node scripts/verify-package.js",
     "verify:clean-room": "node scripts/verify-clean-room.js",
     "verify:clean-room-native-platform": "node scripts/verify-clean-room-native-platform.js",
-    "verify:npm-publication": "node scripts/verify-npm-publication.js",
+    "verify:import-safety": "node scripts/verify-import-safety.js",
+    "verify:npm-publication": "node scripts/block-legacy-publication.js",
     "verify:github-release-preflight": "node scripts/verify-github-release-preflight.js",
     "verify:github-release": "node scripts/verify-github-release.js",
     "verify:published-release": "node scripts/verify-published-release.js",
@@ -134,7 +131,7 @@
     "verify:native-surfaces": "node scripts/verify-native-surfaces.js",
     "verify:native-soak": "node --expose-gc scripts/verify-native-soak.js",
     "qa:viewer-cancellation": "node scripts/viewer-cancellation-fixture.js",
-    "prepublishOnly": "npm run verify:npm-publication"
+    "prepublishOnly": "node scripts/block-legacy-publication.js"
   },
   "engines": {
     "node": ">=22"

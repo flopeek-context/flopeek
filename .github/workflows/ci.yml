@@ -88,6 +88,7 @@ jobs:
       - run: npm run check:support
       - run: npm run check:docs
       - run: npm run verify:core-baseline
+      - run: npm run verify:import-safety
 
   node-compatibility:
     name: Linux / Node ${{ matrix.node }} compatibility

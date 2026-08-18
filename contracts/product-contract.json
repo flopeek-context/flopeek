@@ -1,11 +1,25 @@
 {
   "schemaVersion": "flopeek-product-contract/v1",
+  "authority": {
+    "canonicalRepository": "flopeek-context/flopeek",
+    "coreImplementation": "rust",
+    "persistedAuthority": "sqlite",
+    "primaryDiagnosticLanguages": [
+      "typescript",
+      "tsx"
+    ],
+    "llmRequired": false,
+    "javascriptRepositoryAuthority": false,
+    "automaticRootCauseClaims": false,
+    "historicalOutputClass": "candidate-not-cause"
+  },
   "package": {
     "name": "flopeek",
     "sourceVersion": "0.2.1-beta.4",
     "enginesNode": ">=22",
     "minimumNodeMajor": 22,
-    "distTag": "beta",
+    "publicationState": "blocked-pending-canonical-approval",
+    "distTag": null,
     "lastVerifiedPreview": {
       "version": "0.2.1-beta.3",
       "status": "passed",
@@ -23,6 +37,7 @@
     "publicDefaultImplementation": "javascript",
     "experimentalMode": "native-experimental",
     "experimentalImplementation": "native",
+    "authorityCutoverStatus": "pending",
     "nativeRolloutStatus": "incomplete",
     "nativeDefaultEligible": false
   },
@@ -30,7 +45,7 @@
     "npm": {
       "status": "not-approved",
       "version": "0.2.1-beta.4",
-      "distTag": "beta"
+      "distTag": null
     },
     "github": {
       "status": "not-approved"

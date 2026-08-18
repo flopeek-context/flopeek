@@ -1,5 +1,11 @@
 # Flopeek
 
+> **Canonical repository notice:** `flopeek-context/flopeek` is the sole active
+> repository authority. The frozen `badsleepyday/flopeek-core` snapshot is
+> historical provenance only. Flopeek product, package, CLI, metadata, and
+> Context Ref identities remain canonical; publication is blocked pending new
+> repository-specific destinations, credentials, and approvals.
+
 > Versioned change context for developers and coding agents.
 
 **Flopeek is local-first code intelligence for developers and coding agents.**
@@ -14,13 +20,13 @@ reconstruct call paths, and carry oversized source excerpts between tasks.
 Flopeek keeps one versioned graph on the machine and lets every supported
 surface ask bounded questions of that same state.
 
-The public product identity and its explicit pre-release brand boundary are in
+The preserved product identity and its explicit pre-release boundary are in
 [the product identity note](docs/product-identity.md).
 
-> **Development status:** the `development` branch is WIP for the native/Rust
-> core migration. The stable public baseline remains JavaScript on `main`; the
-> current package is a beta and native remains opt-in until its evidence gates
-> pass. See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md).
+> **Development status:** V1 is a TypeScript/TSX-only cutover toward one Rust
+> repository-truth authority with SQLite persistence. The inherited JavaScript
+> default remains observable compatibility state, not the target authority.
+> See [AGENTS.md](AGENTS.md) and [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md).
 
 ## The five-minute change-context loop
 
@@ -118,10 +124,13 @@ universal accuracy claims.
 
 ## Generated product contract
 
-- Source candidate: `flopeek@0.2.1-beta.4` on npm channel `beta`.
+- Canonical publication: `blocked` pending explicit approval for `flopeek@0.2.1-beta.4`.
+- Repository authority: `flopeek-context/flopeek`; Flopeek product identity is preserved.
+- V1 repository-truth authority: rust with sqlite; target languages are typescript/tsx.
+- LLM required: `false`; JavaScript repository authority: `false`; historical output is `candidate-not-cause`.
 - Last verified preview artifact: `flopeek@0.2.1-beta.3` (`passed`).
 - Runtime: Node.js 22 or later (`>=22`).
-- Public default core: `js` / javascript.
+- Legacy current default core: `js` / javascript; Rust authority cutover is `pending`.
 - Experimental native core: `native-experimental`; rollout is `incomplete` and native-default eligibility is `false`.
 - Release approvals: npm `not-approved`; GitHub Release `not-approved`.
 

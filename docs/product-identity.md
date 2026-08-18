@@ -1,9 +1,14 @@
 # Product identity
 
+> **Authority note:** Flopeek identity is intentionally preserved. Repository
+> and release authority moved to `flopeek-context/flopeek`; the historical
+> `badsleepyday/flopeek-core` repository is provenance only. `AGENTS.md` is the
+> governing contract if this reference becomes stale.
+
 ## Canonical public identity
 
-**Flopeek** is the product, repository, npm-package candidate, and CLI name for
-this public Core. Its public descriptor is:
+**Flopeek** is the product, npm-package candidate, and CLI name. The canonical
+repository is `flopeek-context/flopeek`. Its public descriptor is:
 
 > **Versioned change context for developers and coding agents.**
 
@@ -38,9 +43,7 @@ Flopeek writes local state only under `.flopeek/`.
 
 ## Writing rules
 
-- Write `Flopeek` in product prose, `flopeek` for the package/CLI, and
-  `Flopeek Core` only when distinguishing the public Core from a private
-  overlay.
+- Write `Flopeek` in product prose and `flopeek` for the package/CLI.
 - Use “versioned change context” as the primary category, not “knowledge
   graph”, “SDLC platform”, or “AI code agent”. Those terms may describe
   implementation or adjacent capabilities but are not the public promise.

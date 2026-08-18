@@ -27,9 +27,9 @@ function dotnetContract(root) {
   const globalJson = JSON.parse(fs.readFileSync(path.join(root, "global.json"), "utf8"));
   const sdk = globalJson?.sdk;
   if (!/^\d+\.\d+\.\d+$/u.test(sdk?.version || "")
-    || sdk.rollForward !== "latestPatch"
+    || sdk.rollForward !== "disable"
     || sdk.allowPrerelease !== false) {
-    throw new Error("global.json must pin one exact stable .NET SDK and restrict roll-forward to the same feature band.");
+    throw new Error("global.json must pin one exact stable .NET SDK with roll-forward disabled.");
   }
   return { version: sdk.version, rollForward: sdk.rollForward, allowPrerelease: sdk.allowPrerelease };
 }

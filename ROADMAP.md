@@ -4,12 +4,13 @@
 
 ## Document authority
 
-This is the **single prioritized roadmap for building Flopeek**.
+This is a legacy delivery record retained for historical context. It is not the
+active priority authority.
 
-- [PRODUCT.md](PRODUCT.md) defines the product contract.
-- [ARCHITECTURE.md](ARCHITECTURE.md) defines current and target technical design.
-- [SUPPORT.md](SUPPORT.md) defines current analysis support.
-- This document defines delivery order, user stories, acceptance criteria, dependencies, and status.
+- [AGENTS.md](AGENTS.md) is the single human-readable authority for product
+  scope, architecture, active priorities, and agent behavior.
+- Existing status and ADR references below describe inherited implementation
+  history unless AGENTS.md explicitly adopts them.
 
 This is not a second product specification and is not an SDLC plan for repositories scanned by Flopeek. Flopeek itself is delivered using the Agile process described here. SDLC methods inside Flopeek are a product epic in this roadmap.
 
@@ -32,10 +33,13 @@ Checkboxes describe repository implementation status. Prose alone never implies 
 
 ### Generated product contract
 
-- Source candidate: `flopeek@0.2.1-beta.4` on npm channel `beta`.
+- Canonical publication: `blocked` pending explicit approval for `flopeek@0.2.1-beta.4`.
+- Repository authority: `flopeek-context/flopeek`; Flopeek product identity is preserved.
+- V1 repository-truth authority: rust with sqlite; target languages are typescript/tsx.
+- LLM required: `false`; JavaScript repository authority: `false`; historical output is `candidate-not-cause`.
 - Last verified preview artifact: `flopeek@0.2.1-beta.3` (`passed`).
 - Runtime: Node.js 22 or later (`>=22`).
-- Public default core: `js` / javascript.
+- Legacy current default core: `js` / javascript; Rust authority cutover is `pending`.
 - Experimental native core: `native-experimental`; rollout is `incomplete` and native-default eligibility is `false`.
 - Release approvals: npm `not-approved`; GitHub Release `not-approved`.
 
