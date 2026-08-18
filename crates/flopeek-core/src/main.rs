@@ -1,3 +1,5 @@
+use flopeek_core::diagnostic;
+use flopeek_core::model::DiagnosticLimits;
 use flopeek_core::protocol::{scan_project, serve_jsonl, status_project};
 use serde_json::to_writer_pretty;
 use std::env;
@@ -7,7 +9,7 @@ use std::path::PathBuf;
 const CLI_SCHEMA: &str = "flopeek-cli/v1";
 
 fn usage() -> &'static str {
-    "Flopeek deterministic Rust repository evidence\n\nUsage:\n  flopeek scan [PATH]\n  flopeek status [PATH]\n  flopeek serve\n  flopeek --version\n  flopeek --help\n\nThe only repository-truth core is Rust. Evidence is persisted in SQLite under .flopeek/."
+    "Flopeek deterministic Rust repository evidence\n\nUsage:\n  flopeek scan [PATH]\n  flopeek status [PATH]\n  flopeek diagnose [PATH] CONTEXT_ID\n  flopeek packet [PATH] CONTEXT_ID\n  flopeek serve\n  flopeek --version\n  flopeek --help\n\nThe only repository-truth core is Rust. Evidence is persisted in SQLite under .flopeek/."
 }
 
 fn project_root(argument: Option<String>) -> Result<PathBuf, String> {
@@ -75,6 +77,34 @@ fn run() -> Result<i32, String> {
             if let Some(object) = result.as_object_mut() {
                 object.insert("schemaVersion".to_string(), serde_json::json!(CLI_SCHEMA));
             }
+            print_json(&result)?;
+            Ok(0)
+        }
+        "diagnose" | "packet" => {
+            let positional = arguments.collect::<Vec<_>>();
+            let (path, context_id) = match positional.as_slice() {
+                [context_id] => (None, context_id.clone()),
+                [path, context_id] => (Some(path.clone()), context_id.clone()),
+                _ => {
+                    return Err(format!("{command} accepts CONTEXT_ID or PATH CONTEXT_ID."));
+                }
+            };
+            let root = project_root(path)?;
+            let result = if command == "diagnose" {
+                serde_json::to_value(diagnostic::diagnose_history(
+                    &root,
+                    &context_id,
+                    DiagnosticLimits::default(),
+                )?)
+                .map_err(|error| error.to_string())?
+            } else {
+                serde_json::to_value(diagnostic::build_packet(
+                    &root,
+                    &context_id,
+                    DiagnosticLimits::default(),
+                )?)
+                .map_err(|error| error.to_string())?
+            };
             print_json(&result)?;
             Ok(0)
         }

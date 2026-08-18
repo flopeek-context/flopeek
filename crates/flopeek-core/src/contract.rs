@@ -9,6 +9,7 @@ pub fn validate() -> Result<(), String> {
         || value["canonicalRepository"] != "flopeek-context/flopeek"
         || value["coreImplementation"] != "rust"
         || value["persistedAuthority"] != "sqlite"
+        || value["diagnosticMetadataAuthority"] != "sqlite"
         || value["llmRequired"] != false
         || value["automaticRootCauseClaims"] != false
         || value["javascriptRepositoryAuthority"] != false

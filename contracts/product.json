@@ -3,6 +3,7 @@
   "canonicalRepository": "flopeek-context/flopeek",
   "coreImplementation": "rust",
   "persistedAuthority": "sqlite",
+  "diagnosticMetadataAuthority": "sqlite",
   "primaryAnalyzedLanguages": ["typescript", "tsx"],
   "llmRequired": false,
   "javascriptRepositoryAuthority": false,

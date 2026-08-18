@@ -1,7 +1,11 @@
 //! Small JSONL boundary over the same Rust/SQLite authority used by the CLI.
 
+use crate::diagnostic;
 use crate::graph;
-use crate::model::{PRODUCT_IDENTITY, PROTOCOL_SCHEMA, ScanResult};
+use crate::model::{
+    DiagnosticAssertion, DiagnosticContext, DiagnosticLimits, PRODUCT_IDENTITY, PROTOCOL_SCHEMA,
+    ScanResult,
+};
 use crate::store;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -91,6 +95,7 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             "core": "rust",
             "analyzedLanguages": ["typescript", "tsx"],
             "persistedAuthority": "sqlite",
+            "diagnosticMetadataAuthority": "sqlite",
             "llmRequired": false,
         })),
         "scan" => {
@@ -122,8 +127,110 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             serde_json::to_value(store::resolve_context(&root, uri)?)
                 .map_err(|error| error.to_string())
         }
+        "createDiagnosticContext" => {
+            let root = project_root(params)?;
+            let value = payload_value(params, "context");
+            let context = serde_json::from_value::<DiagnosticContext>(value)
+                .map_err(|error| format!("Invalid Diagnostic Context: {error}"))?;
+            serde_json::to_value(store::create_diagnostic_context(&root, context)?)
+                .map_err(|error| error.to_string())
+        }
+        "getDiagnosticContext" => {
+            let root = project_root(params)?;
+            let id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "getDiagnosticContext requires params.contextId.".to_string())?;
+            serde_json::to_value(store::get_diagnostic_context(&root, id)?)
+                .map_err(|error| error.to_string())
+        }
+        "listDiagnosticAssertions" => {
+            let root = project_root(params)?;
+            let id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "listDiagnosticAssertions requires params.contextId.".to_string())?;
+            serde_json::to_value(store::list_diagnostic_assertions(&root, id)?)
+                .map_err(|error| error.to_string())
+        }
+        "appendDiagnosticAssertion" => {
+            let root = project_root(params)?;
+            let value = payload_value(params, "assertion");
+            let assertion = serde_json::from_value::<DiagnosticAssertion>(value)
+                .map_err(|error| format!("Invalid Diagnostic Assertion: {error}"))?;
+            serde_json::to_value(store::append_diagnostic_assertion(&root, assertion)?)
+                .map_err(|error| error.to_string())
+        }
+        "diagnoseHistory" => {
+            let root = project_root(params)?;
+            let context_id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "diagnoseHistory requires params.contextId.".to_string())?;
+            serde_json::to_value(diagnostic::diagnose_history(
+                &root,
+                context_id,
+                limits_from_params(params),
+            )?)
+            .map_err(|error| error.to_string())
+        }
+        "getDiagnosticPacket" => {
+            let root = project_root(params)?;
+            let context_id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "getDiagnosticPacket requires params.contextId.".to_string())?;
+            serde_json::to_value(diagnostic::build_packet(
+                &root,
+                context_id,
+                limits_from_params(params),
+            )?)
+            .map_err(|error| error.to_string())
+        }
         _ => Err(format!("Unsupported protocol method: {method}")),
     }
+}
+
+fn limits_from_params(params: &Value) -> DiagnosticLimits {
+    let mut limits = DiagnosticLimits::default();
+    let Some(value) = params.get("limits") else {
+        return limits;
+    };
+    if let Some(number) = value.get("maxCommits").and_then(Value::as_u64) {
+        limits.max_commits = number as usize;
+    }
+    if let Some(number) = value.get("maxCandidates").and_then(Value::as_u64) {
+        limits.max_candidates = number as usize;
+    }
+    if let Some(number) = value.get("maxPaths").and_then(Value::as_u64) {
+        limits.max_paths = number as usize;
+    }
+    if let Some(number) = value.get("maxContextRefs").and_then(Value::as_u64) {
+        limits.max_context_refs = number as usize;
+    }
+    if let Some(number) = value.get("maxAssertions").and_then(Value::as_u64) {
+        limits.max_assertions = number as usize;
+    }
+    if let Some(number) = value.get("maxSnapshotBytes").and_then(Value::as_u64) {
+        limits.max_snapshot_bytes = number as usize;
+    }
+    if let Some(number) = value.get("maxPacketBytes").and_then(Value::as_u64) {
+        limits.max_packet_bytes = number as usize;
+    }
+    limits
+}
+
+fn payload_value(params: &Value, key: &str) -> Value {
+    if let Some(value) = params.get(key) {
+        return value.clone();
+    }
+    let Some(object) = params.as_object() else {
+        return params.clone();
+    };
+    let mut payload = object.clone();
+    payload.remove("projectRoot");
+    payload.remove("limits");
+    Value::Object(payload)
 }
 
 fn project_root(params: &Value) -> Result<PathBuf, String> {
@@ -153,6 +260,7 @@ mod tests {
         assert_eq!(response["ok"], true);
         assert_eq!(response["result"]["core"], "rust");
         assert_eq!(response["result"]["analyzedLanguages"][0], "typescript");
+        assert_eq!(response["result"]["diagnosticMetadataAuthority"], "sqlite");
     }
 
     #[test]

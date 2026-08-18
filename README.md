@@ -2,7 +2,8 @@
 
 Flopeek is a local-first product for versioned repository engineering context:
 deterministic TypeScript/TSX source evidence, graph identity, Context Ref
-freshness, and (as the diagnostic layers land) historical change candidates.
+freshness, versioned diagnostic memory, and bounded historical change
+candidates.
 
 The active implementation authority is Rust. SQLite is the canonical local
 store. No LLM, network service, target-runtime execution, or JavaScript fallback
@@ -23,6 +24,8 @@ The CLI is built as `flopeek`:
 ```powershell
 cargo run -p flopeek-core -- scan .
 cargo run -p flopeek-core -- status .
+cargo run -p flopeek-core -- diagnose . CONTEXT_ID
+cargo run -p flopeek-core -- packet . CONTEXT_ID
 cargo run -p flopeek-core -- serve
 ```
 
@@ -34,6 +37,18 @@ carry project, graph, version, and node identity; an older reference resolves as
 
 Static evidence does not prove runtime behavior or root cause. Dynamic dispatch,
 reflection, generated source, and business intent remain explicitly unavailable.
+
+Diagnostic Contexts, Assertions, and historical candidates are stored in the
+SQLite authority with explicit domain tables; they do not advance
+`graphVersion`.
+Immutable Git-revision graph snapshots used for adjacent comparisons are cached
+under `.flopeek/diagnostics/history/` and bounded by the diagnostic limits.
+The JSONL service exposes `createDiagnosticContext`, `getDiagnosticContext`,
+`appendDiagnosticAssertion`, `diagnoseHistory`, and `getDiagnosticPacket` in
+addition to graph queries. Assertions retain their kind, actor, evidence class,
+and lifecycle separately from deterministic historical candidates. A historical
+packet reports the current graph basis, an explicit last-known-good revision,
+stale Context Refs, bounded candidates, omissions, and unresolved limitations.
 
 ## Scope and provenance
 
