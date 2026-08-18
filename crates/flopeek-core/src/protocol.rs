@@ -261,6 +261,7 @@ mod tests {
         serve_jsonl(input, &mut output).expect("serve");
         let response: Value = serde_json::from_slice(&output).expect("json");
         assert_eq!(response["ok"], true);
+        assert_eq!(response["schemaVersion"], PROTOCOL_SCHEMA);
         assert_eq!(response["result"]["core"], "rust");
         assert_eq!(response["result"]["analyzedLanguages"][0], "typescript");
         assert_eq!(response["result"]["diagnosticMetadataAuthority"], "sqlite");

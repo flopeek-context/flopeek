@@ -45,6 +45,15 @@ file-level fallback or resolve as `unresolved`. Resolution includes origin and
 current graph bases, observation IDs, fingerprint scope, and the deterministic
 freshness reason.
 
+TypeScript import evidence records named aliases, default imports, namespace
+imports, side-effect imports, and type-only imports. Direct calls resolve only
+through same-module declarations or an exact relative import binding. Relative
+lookup is deterministic across `.ts`, `.tsx`, `.d.ts`, and directory index files
+while repository escapes are rejected. Resolved edges point from the caller
+symbol to the callee symbol. Ambiguous, missing, external, dynamic,
+non-relative-alias, and re-export references remain explicit in bounded graph
+`resolution_evidence` records and are never guessed.
+
 Static evidence does not prove runtime behavior or root cause. Dynamic dispatch,
 reflection, generated source, and business intent remain explicitly unavailable.
 

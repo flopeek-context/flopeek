@@ -312,6 +312,7 @@ mod tests {
             files: Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
+            resolution_evidence: crate::model::ResolutionEvidence::default(),
             truncated: false,
             omissions: Vec::new(),
         };

@@ -8,16 +8,18 @@ use serde::{Deserialize, Serialize};
 
 pub const PRODUCT_IDENTITY: &str = "flopeek-repository-memory";
 pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v1";
-pub const GRAPH_SCHEMA: &str = "flopeek-graph/v2";
+pub const GRAPH_SCHEMA: &str = "flopeek-graph/v3";
 pub const CONTEXT_REF_SCHEMA: &str = "flopeek-context-ref/v2";
-pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v2";
+pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v3";
 pub const STORE_SCHEMA: &str = "flopeek-sqlite/v2";
+pub const TYPESCRIPT_FACTS_SCHEMA: &str = "flopeek-typescript-facts/v2";
+pub const TYPESCRIPT_RESOLUTION_SCHEMA: &str = "flopeek-typescript-resolution/v1";
 pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v2";
 pub const DIAGNOSTIC_ASSERTION_SCHEMA: &str = "flopeek-diagnostic-assertion/v2";
 pub const HISTORICAL_CANDIDATE_SCHEMA: &str = "flopeek-historical-candidate/v2";
 pub const HISTORICAL_DIAGNOSIS_SCHEMA: &str = "flopeek-historical-diagnosis/v1";
 pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v2";
-pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v2";
+pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v3";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +43,12 @@ pub struct TypeScriptImport {
     pub specifier: String,
     pub kind: String,
     pub position: SourcePosition,
+    #[serde(default)]
+    pub local_name: Option<String>,
+    #[serde(default)]
+    pub imported_name: Option<String>,
+    #[serde(default)]
+    pub type_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +58,8 @@ pub struct TypeScriptDeclaration {
     pub exported: bool,
     pub position: SourcePosition,
     #[serde(default)]
+    pub qualified_name: String,
+    #[serde(default)]
     pub ast_fingerprint: String,
 }
 
@@ -58,10 +68,43 @@ pub struct TypeScriptCall {
     pub callee: Option<String>,
     pub dynamic: bool,
     pub position: SourcePosition,
+    #[serde(default)]
+    pub caller: Option<String>,
+    #[serde(default)]
+    pub callee_form: String,
+    #[serde(default)]
+    pub receiver: Option<String>,
+    #[serde(default)]
+    pub shadowed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TypeScriptExport {
+    pub exported_name: String,
+    pub local_name: Option<String>,
+    pub kind: String,
+    pub source: Option<String>,
+    pub type_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolResolution {
+    pub path: String,
+    pub caller_node_id: String,
+    pub reference: String,
+    pub form: String,
+    pub status: String,
+    pub reason: String,
+    pub candidate_node_ids: Vec<String>,
+    pub occurrence_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TypeScriptFacts {
+    #[serde(default)]
+    pub schema_version: String,
     pub path: String,
     pub language: String,
     pub source_hash: String,
@@ -69,10 +112,38 @@ pub struct TypeScriptFacts {
     pub parse_status: String,
     pub imports: Vec<TypeScriptImport>,
     pub declarations: Vec<TypeScriptDeclaration>,
+    #[serde(default)]
+    pub exports: Vec<TypeScriptExport>,
     pub calls: Vec<TypeScriptCall>,
     pub unsupported: Vec<String>,
     #[serde(default)]
+    pub resolution_records: Vec<SymbolResolution>,
+    #[serde(default)]
     pub canonical_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResolutionEvidence {
+    pub schema_version: String,
+    pub status: String,
+    pub records: Vec<SymbolResolution>,
+    pub truncated: bool,
+    pub omissions: Vec<String>,
+}
+
+impl Default for ResolutionEvidence {
+    fn default() -> Self {
+        Self {
+            schema_version: TYPESCRIPT_RESOLUTION_SCHEMA.to_string(),
+            status: "unavailable".to_string(),
+            records: Vec::new(),
+            truncated: false,
+            omissions: vec![
+                "resolution evidence is unavailable until a v2 TypeScript facts scan".to_string(),
+            ],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -111,6 +182,8 @@ pub struct GraphSnapshot {
     pub files: Vec<SourceFile>,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    #[serde(default)]
+    pub resolution_evidence: ResolutionEvidence,
     pub truncated: bool,
     pub omissions: Vec<String>,
 }
@@ -301,6 +374,8 @@ pub struct HistoricalSnapshot {
     pub files: Vec<SourceFile>,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    #[serde(default)]
+    pub resolution_evidence: ResolutionEvidence,
     pub truncated: bool,
     pub omissions: Vec<String>,
 }
