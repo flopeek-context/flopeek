@@ -151,7 +151,7 @@
     "svelte": "^5.56.4",
     "tree-sitter": "^0.21.1",
     "tree-sitter-java": "^0.23.5",
-    "tree-sitter-rust": "^0.21.0",
+    "tree-sitter-rust": "^0.24.0",
     "typescript": "^5.9.3",
     "zod": "^4.4.3"
   },
