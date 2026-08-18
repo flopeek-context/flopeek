@@ -1322,6 +1322,7 @@ mod tests {
     use super::*;
     use crate::graph;
     use std::fs;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn fixture_root() -> PathBuf {
@@ -1333,6 +1334,20 @@ mod tests {
         fs::create_dir_all(root.join("src")).expect("mkdir");
         fs::write(root.join("src/main.ts"), "export const main = 1;").expect("write");
         root
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -1421,6 +1436,147 @@ mod tests {
         let resolved = resolve_context(&root, &focused).expect("resolve focused");
         assert_eq!(resolved.status, "stale");
         assert!(resolved.freshness_reason.contains("fingerprint"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn identical_structure_across_revision_gets_new_observation_and_reuses_graph_version() {
+        let root = fixture_root();
+        git(&root, &["init"]);
+        git(
+            &root,
+            &["config", "user.email", "flopeek-test@example.invalid"],
+        );
+        git(&root, &["config", "user.name", "Flopeek Test"]);
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "source A"]);
+        let (snapshot, facts) = graph::build(&root).expect("build A");
+        let first = persist_scan(&root, snapshot, &facts).expect("scan A");
+        fs::write(root.join("README.md"), "documentation-only change\n").expect("README");
+        git(&root, &["add", "README.md"]);
+        git(&root, &["commit", "-m", "README only"]);
+        let (snapshot, facts) = graph::build(&root).expect("build README");
+        let second = persist_scan(&root, snapshot, &facts).expect("scan README");
+        assert_eq!(first.graph.graph_id, second.graph.graph_id);
+        assert_eq!(first.graph.graph_version, second.graph.graph_version);
+        let connection = open(&root).expect("open");
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM graph_observations", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("observations"),
+            2
+        );
+        assert_ne!(first.graph.observation_id, second.graph.observation_id);
+        let manifest = connection
+            .query_row(
+                "SELECT source_manifest_json FROM graph_observations ORDER BY observed_at LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("manifest");
+        assert!(!manifest.contains("export const main"));
+        assert_eq!(
+            resolve_context(&root, &first.context_refs[0].uri)
+                .expect("resolve old ref")
+                .status,
+            "current"
+        );
+        drop(connection);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn failed_v3_to_v4_migration_preserves_user_version_and_existing_rows() {
+        let root = fixture_root();
+        let connection = open(&root).expect("fresh database");
+        connection
+            .execute(
+                "INSERT INTO graph_versions(
+                    graph_version, graph_id, project_id, source_revision,
+                    created_at, truncated, omissions_json
+                 ) VALUES(1, 'graph-old', 'project-old', 'revision-old', 1, 0, '[]')",
+                [],
+            )
+            .expect("old graph");
+        connection
+            .execute_batch(
+                "PRAGMA user_version = 3;
+                 CREATE TRIGGER fail_observation_migration
+                 BEFORE INSERT ON graph_observations
+                 BEGIN SELECT RAISE(ABORT, 'forced migration failure'); END;",
+            )
+            .expect("prepare failed migration");
+        drop(connection);
+        assert!(open(&root).is_err());
+        let connection = rusqlite::Connection::open(database_path(&root)).expect("inspect");
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .expect("version"),
+            3
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM graph_versions", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("graph row"),
+            1
+        );
+        drop(connection);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn legacy_context_ref_is_unresolved_without_evidence_and_uses_file_fallback_with_hash() {
+        let root = fixture_root();
+        let (snapshot, facts) = graph::build(&root).expect("build");
+        let result = persist_scan(&root, snapshot, &facts).expect("persist");
+        let reference = &result.context_refs[0];
+        let connection = open(&root).expect("open");
+        connection
+            .execute(
+                "UPDATE context_refs
+                 SET origin_observation_id = '', origin_fingerprint = '', fingerprint_scope = 'legacy-file-v1'
+                 WHERE uri = ?1",
+                params![reference.uri],
+            )
+            .expect("legacy unresolved");
+        drop(connection);
+        assert_eq!(
+            resolve_context(&root, &reference.uri)
+                .expect("resolve unresolved")
+                .status,
+            "unresolved"
+        );
+        let connection = open(&root).expect("reopen");
+        let (observation_id, hash) = connection
+            .query_row(
+                "SELECT observation.observation_id, source.hash
+                 FROM graph_observations observation
+                 JOIN source_files source ON source.graph_version = observation.graph_version
+                 JOIN graph_nodes node ON node.graph_version = source.graph_version
+                     AND node.path = source.path
+                 WHERE observation.graph_version = ?1 AND node.node_id = ?2 LIMIT 1",
+                params![result.graph.graph_version as i64, reference.node_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("legacy fallback evidence");
+        connection
+            .execute(
+                "UPDATE context_refs
+                 SET origin_observation_id = ?1, origin_fingerprint = ?2, fingerprint_scope = 'legacy-file-v1'
+                 WHERE uri = ?3",
+                params![observation_id, hash, reference.uri],
+            )
+            .expect("legacy evidence");
+        drop(connection);
+        assert_eq!(
+            resolve_context(&root, &reference.uri)
+                .expect("resolve legacy current")
+                .status,
+            "current"
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 
