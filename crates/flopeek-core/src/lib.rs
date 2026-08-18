@@ -25,4 +25,20 @@ mod architecture_contract_tests {
         let _: fn(&std::path::Path, &str) -> Result<crate::model::ContextRef, String> =
             crate::store::resolve_context;
     }
+
+    #[test]
+    fn typescript_evidence_identity_and_flow_ids_remain_stable() {
+        assert_eq!(
+            crate::typescript::PARSER_IDENTITY,
+            "tree-sitter-typescript/0.23.2"
+        );
+        assert_eq!(
+            crate::graph::GRAPH_DERIVATION_ID,
+            "typescript-structural-evidence-v6"
+        );
+        assert_eq!(
+            crate::flow::flow_id("project", "script", "start"),
+            crate::flow::flow_id("project", "script", "start")
+        );
+    }
 }
