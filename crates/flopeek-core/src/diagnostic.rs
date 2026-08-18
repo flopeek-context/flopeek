@@ -7,9 +7,10 @@
 use crate::model::{
     ContextRef, DIAGNOSTIC_ASSERTION_SCHEMA, DIAGNOSTIC_CONTEXT_SCHEMA, DIAGNOSTIC_PACKET_SCHEMA,
     DiagnosticAssertion, DiagnosticContext, DiagnosticLimits, DiagnosticPacket, EvidenceReference,
-    GitBasis, GraphBasis, GraphNode, HISTORICAL_DIAGNOSIS_SCHEMA, HISTORICAL_SNAPSHOT_SCHEMA,
-    HistoricalCandidate, HistoricalDiagnosis, HistoricalSnapshot,
+    GitBasis, GraphBasis, GraphNode, HISTORICAL_CANDIDATE_SCHEMA, HISTORICAL_DIAGNOSIS_SCHEMA,
+    HISTORICAL_SNAPSHOT_SCHEMA, HistoricalCandidate, HistoricalDiagnosis, HistoricalSnapshot,
 };
+use crate::module_resolution::{MAX_CONFIG_BYTES, MAX_CONFIG_FILES, config_extends};
 use crate::store;
 use crate::typescript::PARSER_IDENTITY;
 use serde_json::Value;
@@ -21,7 +22,7 @@ use std::process::Command;
 const MAX_ID_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_LIST_ITEMS: usize = 256;
-const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v3";
+const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v4";
 
 const ALLOWED_INTENTS: &[&str] = &["diagnose", "audit", "verify-fix"];
 const ALLOWED_CONTEXT_STATUSES: &[&str] = &["open", "reconciled", "resolved", "superseded"];
@@ -393,7 +394,7 @@ pub fn diagnose_history(
             context.id, current_basis.graph_id, commit.sha
         );
         candidates.push(HistoricalCandidate {
-            schema_version: HISTORICAL_DIAGNOSIS_SCHEMA.to_string(),
+            schema_version: HISTORICAL_CANDIDATE_SCHEMA.to_string(),
             id: format!("candidate_{}", blake3::hash(id_input.as_bytes()).to_hex()),
             project_id: graph.project_id.clone(),
             context_id: context.id.clone(),
@@ -745,7 +746,7 @@ fn build_historical_snapshot(
     let mut truncated = false;
     let mut omissions = Vec::new();
     let mut included = 0_usize;
-    for path in paths.into_iter().filter(|path| is_typescript_path(path)) {
+    for path in paths.iter().filter(|path| is_typescript_path(path)) {
         if included >= limits.max_paths {
             truncated = true;
             omissions.push(format!(
@@ -754,12 +755,63 @@ fn build_historical_snapshot(
             ));
             break;
         }
-        if !safe_relative_path(&path) {
+        if !safe_relative_path(path) {
             truncated = true;
             omissions.push(format!("unsafe historical path omitted: {path}"));
             continue;
         }
+        let bytes = git_show_bytes(root, revision, path)?;
+        if total_bytes.saturating_add(bytes.len()) > limits.max_snapshot_bytes {
+            truncated = true;
+            omissions.push(format!(
+                "historical snapshot bytes capped at {}",
+                limits.max_snapshot_bytes
+            ));
+            break;
+        }
+        let destination = temporary.join(path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("Unable to create historical source directory: {error}")
+            })?;
+        }
+        fs::write(destination, &bytes).map_err(|error| {
+            format!("Unable to materialize historical source evidence: {error}")
+        })?;
+        total_bytes += bytes.len();
+        included += 1;
+    }
+    let config_paths = match historical_config_paths(root, revision, &paths) {
+        Ok(paths) => paths,
+        Err(error) => {
+            if error.contains("capped") {
+                truncated = true;
+            }
+            omissions.push(format!(
+                "historical module configuration unavailable: {error}"
+            ));
+            if paths.iter().any(|path| path == "tsconfig.json") {
+                vec!["tsconfig.json".to_string()]
+            } else {
+                Vec::new()
+            }
+        }
+    };
+    let mut config_bytes = 0_usize;
+    for path in config_paths {
+        if !safe_relative_path(&path) {
+            truncated = true;
+            omissions.push(format!("unsafe historical config path omitted: {path}"));
+            continue;
+        }
         let bytes = git_show_bytes(root, revision, &path)?;
+        if config_bytes.saturating_add(bytes.len()) > MAX_CONFIG_BYTES {
+            truncated = true;
+            omissions.push(format!(
+                "historical module configuration bytes capped at {MAX_CONFIG_BYTES}"
+            ));
+            break;
+        }
         if total_bytes.saturating_add(bytes.len()) > limits.max_snapshot_bytes {
             truncated = true;
             omissions.push(format!(
@@ -771,14 +823,14 @@ fn build_historical_snapshot(
         let destination = temporary.join(&path);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent).map_err(|error| {
-                format!("Unable to create historical source directory: {error}")
+                format!("Unable to create historical config directory: {error}")
             })?;
         }
         fs::write(destination, &bytes).map_err(|error| {
-            format!("Unable to materialize historical source evidence: {error}")
+            format!("Unable to materialize historical config evidence: {error}")
         })?;
         total_bytes += bytes.len();
-        included += 1;
+        config_bytes += bytes.len();
     }
     let built = crate::graph::build(&temporary);
     let _ = fs::remove_dir_all(&temporary);
@@ -797,6 +849,7 @@ fn build_historical_snapshot(
         nodes: graph_snapshot.nodes,
         edges: graph_snapshot.edges,
         resolution_evidence: graph_snapshot.resolution_evidence,
+        module_resolution: graph_snapshot.module_resolution,
         truncated: graph_snapshot.truncated,
         omissions: graph_snapshot.omissions,
     })
@@ -809,6 +862,39 @@ fn git_tree_paths(root: &Path, revision: &str) -> Result<Vec<String>, String> {
         .map(|path| path.replace('\\', "/"))
         .filter(|path| !path.is_empty())
         .collect())
+}
+
+fn historical_config_paths(
+    root: &Path,
+    revision: &str,
+    paths: &[String],
+) -> Result<Vec<String>, String> {
+    if !paths.iter().any(|path| path == "tsconfig.json") {
+        return Ok(Vec::new());
+    }
+    let path_set = paths.iter().cloned().collect::<BTreeSet<_>>();
+    let mut result = Vec::new();
+    let mut current = "tsconfig.json".to_string();
+    while result.len() < MAX_CONFIG_FILES {
+        if result.iter().any(|path| path == &current) {
+            return Ok(result);
+        }
+        if !path_set.contains(&current) {
+            return Ok(result);
+        }
+        let bytes = git_show_bytes(root, revision, &current)?;
+        result.push(current.clone());
+        let Some(parent) = config_extends(&current, &bytes)? else {
+            break;
+        };
+        current = parent;
+    }
+    if result.len() >= MAX_CONFIG_FILES {
+        return Err(format!(
+            "historical-tsconfig-files-capped-at-{MAX_CONFIG_FILES}"
+        ));
+    }
+    Ok(result)
 }
 
 fn git_show_bytes(root: &Path, revision: &str, path: &str) -> Result<Vec<u8>, String> {

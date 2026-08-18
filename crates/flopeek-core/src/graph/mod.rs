@@ -1,6 +1,9 @@
 //! Deterministic graph assembly for TypeScript/TSX evidence.
 
 use crate::discovery::{discover, read_source};
+use crate::module_resolution::{
+    ModuleResolver, NonRelativeResolution, resolve_relative as resolve_module_relative,
+};
 
 use crate::model::{
     GraphEdge, GraphNode, GraphSnapshot, PRODUCT_IDENTITY, ResolutionEvidence, SourceFile,
@@ -9,19 +12,29 @@ use crate::model::{
 use crate::typescript;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path};
+use std::path::Path;
 use std::process::Command;
 
 pub const MAX_SOURCE_FILES: usize = 10_000;
 pub const MAX_GRAPH_NODES: usize = 50_000;
 pub const MAX_GRAPH_EDGES: usize = 100_000;
 pub const MAX_RESOLUTION_RECORDS: usize = 100_000;
-pub const GRAPH_DERIVATION_ID: &str = "typescript-structural-evidence-v3";
+pub const MAX_REEXPORT_DEPTH: usize = 32;
+pub const GRAPH_DERIVATION_ID: &str = "typescript-structural-evidence-v4";
 
-type ModuleExports = BTreeMap<String, BTreeMap<String, Vec<String>>>;
-type DeferredExports = BTreeSet<(String, String)>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExportBinding {
+    Local(Vec<String>),
+    Forward { source: String, name: String },
+    Star { source: String },
+    Namespace { source: String },
+    TypeOnly,
+}
+
+type ModuleExports = BTreeMap<String, BTreeMap<String, Vec<ExportBinding>>>;
 
 pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), String> {
+    let module_resolver = ModuleResolver::load(root);
     let mut files = discover(root)?;
     let mut truncated = false;
     let mut omissions = Vec::new();
@@ -137,58 +150,101 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
                     kind: "imports-unresolved".to_string(),
                     evidence: "missing-relative-module".to_string(),
                 });
-            } else if is_non_relative_alias(&import.specifier, &known_paths) {
-                let target_id = node_id("unresolved-module", &import.specifier, "");
-                if !nodes.iter().any(|node| node.id == target_id) {
-                    nodes.push(GraphNode {
-                        id: target_id.clone(),
-                        kind: "unresolved-module".to_string(),
-                        path: None,
-                        name: Some(import.specifier.clone()),
-                        language: None,
-                        evidence_fingerprint: String::new(),
-                    });
-                }
-                edges.push(GraphEdge {
-                    from: file_id.clone(),
-                    to: target_id,
-                    kind: "imports-unresolved".to_string(),
-                    evidence: "non-relative-path-alias".to_string(),
-                });
             } else {
-                let target_id = external_ids
-                    .entry(import.specifier.clone())
-                    .or_insert_with(|| node_id("external-module", &import.specifier, ""))
-                    .clone();
-                if !nodes.iter().any(|node| node.id == target_id) {
-                    nodes.push(GraphNode {
-                        id: target_id.clone(),
-                        kind: "external-module".to_string(),
-                        path: None,
-                        name: Some(import.specifier.clone()),
-                        language: None,
-                        evidence_fingerprint: String::new(),
-                    });
+                let non_relative =
+                    module_resolver.resolve_non_relative(&import.specifier, &known_paths);
+                match non_relative {
+                    NonRelativeResolution::Local(target_path) => {
+                        let target_id = file_ids.get(&target_path).ok_or_else(|| {
+                            format!("Missing aliased file node for {target_path}")
+                        })?;
+                        edges.push(GraphEdge {
+                            from: file_id.clone(),
+                            to: target_id.clone(),
+                            kind: "imports".to_string(),
+                            evidence: "tsconfig-path-alias".to_string(),
+                        });
+                    }
+                    NonRelativeResolution::Unresolved(reason)
+                        if is_non_relative_alias(&import.specifier, &known_paths)
+                            || !reason.starts_with("tsconfig-resolution-") =>
+                    {
+                        let target_id = node_id("unresolved-module", &import.specifier, "");
+                        if !nodes.iter().any(|node| node.id == target_id) {
+                            nodes.push(GraphNode {
+                                id: target_id.clone(),
+                                kind: "unresolved-module".to_string(),
+                                path: None,
+                                name: Some(import.specifier.clone()),
+                                language: None,
+                                evidence_fingerprint: String::new(),
+                            });
+                        }
+                        edges.push(GraphEdge {
+                            from: file_id.clone(),
+                            to: target_id,
+                            kind: "imports-unresolved".to_string(),
+                            evidence: reason,
+                        });
+                    }
+                    NonRelativeResolution::Unresolved(_) | NonRelativeResolution::External
+                        if module_resolver.basis.root_config.is_none()
+                            && is_non_relative_alias(&import.specifier, &known_paths) =>
+                    {
+                        let target_id = node_id("unresolved-module", &import.specifier, "");
+                        if !nodes.iter().any(|node| node.id == target_id) {
+                            nodes.push(GraphNode {
+                                id: target_id.clone(),
+                                kind: "unresolved-module".to_string(),
+                                path: None,
+                                name: Some(import.specifier.clone()),
+                                language: None,
+                                evidence_fingerprint: String::new(),
+                            });
+                        }
+                        edges.push(GraphEdge {
+                            from: file_id.clone(),
+                            to: target_id,
+                            kind: "imports-unresolved".to_string(),
+                            evidence: "non-relative-path-alias".to_string(),
+                        });
+                    }
+                    NonRelativeResolution::Unresolved(_) | NonRelativeResolution::External => {
+                        let target_id = external_ids
+                            .entry(import.specifier.clone())
+                            .or_insert_with(|| node_id("external-module", &import.specifier, ""))
+                            .clone();
+                        if !nodes.iter().any(|node| node.id == target_id) {
+                            nodes.push(GraphNode {
+                                id: target_id.clone(),
+                                kind: "external-module".to_string(),
+                                path: None,
+                                name: Some(import.specifier.clone()),
+                                language: None,
+                                evidence_fingerprint: String::new(),
+                            });
+                        }
+                        edges.push(GraphEdge {
+                            from: file_id.clone(),
+                            to: target_id,
+                            kind: "imports-external".to_string(),
+                            evidence: import.kind.clone(),
+                        });
+                    }
                 }
-                edges.push(GraphEdge {
-                    from: file_id.clone(),
-                    to: target_id,
-                    kind: "imports-external".to_string(),
-                    evidence: import.kind.clone(),
-                });
             }
         }
     }
 
-    let (module_exports, deferred_exports) = build_module_exports(&facts, &symbols_by_path);
+    let module_exports = build_module_exports(&facts, &symbols_by_path);
     let resolution = ResolutionContext {
         file_ids: &file_ids,
         symbols_by_path: &symbols_by_path,
         symbol_kinds: &symbol_kinds,
         module_exports: &module_exports,
-        deferred_exports: &deferred_exports,
         known_paths: &known_paths,
         external_ids: &external_ids,
+        module_resolver: &module_resolver,
     };
     resolve_calls(&mut facts, &resolution, &mut edges);
 
@@ -202,10 +258,29 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
     });
     edges.dedup();
 
-    let resolution_evidence = resolution_evidence(&facts, false);
+    let mut resolution_evidence = resolution_evidence(&facts, false);
     if resolution_evidence.truncated {
         truncated = true;
         omissions.extend(resolution_evidence.omissions.clone());
+    }
+    if module_resolver.basis.status == "truncated" {
+        truncated = true;
+        resolution_evidence.status = "truncated".to_string();
+        resolution_evidence.truncated = true;
+        resolution_evidence
+            .omissions
+            .extend(module_resolver.basis.limitations.clone());
+        omissions.extend(module_resolver.basis.limitations.clone());
+    }
+    if module_resolver.basis.status == "unavailable" {
+        resolution_evidence.status = "unavailable".to_string();
+        resolution_evidence
+            .omissions
+            .push("module-resolution-basis-unavailable".to_string());
+        resolution_evidence
+            .omissions
+            .extend(module_resolver.basis.limitations.clone());
+        omissions.extend(module_resolver.basis.limitations.clone());
     }
     assign_node_fingerprints(&mut nodes, &edges, &facts);
     if nodes.len() > MAX_GRAPH_NODES {
@@ -239,6 +314,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
     let graph_id = blake3::hash(&serde_json::to_vec(&identity).map_err(|error| error.to_string())?)
         .to_hex()
         .to_string();
+    let module_resolution = module_resolver.basis.clone();
     Ok((
         GraphSnapshot {
             schema_version: crate::model::GRAPH_SCHEMA.to_string(),
@@ -253,6 +329,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
             nodes,
             edges,
             resolution_evidence,
+            module_resolution,
             truncated,
             omissions,
         },
@@ -273,48 +350,86 @@ struct GraphIdentity<'a> {
 fn build_module_exports(
     facts: &[TypeScriptFacts],
     symbols_by_path: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
-) -> (ModuleExports, DeferredExports) {
+) -> ModuleExports {
     let mut module_exports = ModuleExports::new();
-    let mut deferred_exports = BTreeSet::new();
     for fact in facts {
         let local_symbols = symbols_by_path.get(&fact.path);
         let exports = module_exports.entry(fact.path.clone()).or_default();
         for export in &fact.exports {
-            if export.source.is_some() {
-                deferred_exports.insert((fact.path.clone(), export.exported_name.clone()));
+            if export.type_only {
+                exports
+                    .entry(export.exported_name.clone())
+                    .or_default()
+                    .push(ExportBinding::TypeOnly);
                 continue;
             }
-            if export.type_only {
+            if let Some(source) = export.source.as_deref() {
+                let binding = if export.kind == "namespace-re-export" {
+                    ExportBinding::Namespace {
+                        source: source.to_string(),
+                    }
+                } else if export.exported_name == "*" {
+                    ExportBinding::Star {
+                        source: source.to_string(),
+                    }
+                } else {
+                    ExportBinding::Forward {
+                        source: source.to_string(),
+                        name: export
+                            .local_name
+                            .as_deref()
+                            .unwrap_or(&export.exported_name)
+                            .to_string(),
+                    }
+                };
+                exports
+                    .entry(export.exported_name.clone())
+                    .or_default()
+                    .push(binding);
                 continue;
             }
             let Some(local_name) = export.local_name.as_deref() else {
                 continue;
             };
-            let imported_binding = fact.imports.iter().any(|import| {
+            if let Some(targets) = local_symbols.and_then(|symbols| symbols.get(local_name)) {
+                exports
+                    .entry(export.exported_name.clone())
+                    .or_default()
+                    .push(ExportBinding::Local(targets.clone()));
+                continue;
+            }
+            if let Some(import) = fact.imports.iter().find(|import| {
                 import.local_name.as_deref() == Some(local_name)
                     && import.kind != "side-effect-import"
-            });
-            let Some(local_symbols) = local_symbols else {
-                if imported_binding {
-                    deferred_exports.insert((fact.path.clone(), export.exported_name.clone()));
-                }
-                continue;
-            };
-            let Some(targets) = local_symbols.get(local_name) else {
-                if imported_binding {
-                    deferred_exports.insert((fact.path.clone(), export.exported_name.clone()));
-                }
-                continue;
-            };
-            let entry = exports.entry(export.exported_name.clone()).or_default();
-            entry.extend(targets.iter().cloned());
+                    && import.kind != "re-export"
+                    && !import.type_only
+            }) {
+                let binding = if import.kind == "namespace-import" {
+                    ExportBinding::Namespace {
+                        source: import.specifier.clone(),
+                    }
+                } else {
+                    ExportBinding::Forward {
+                        source: import.specifier.clone(),
+                        name: import
+                            .imported_name
+                            .as_deref()
+                            .unwrap_or("default")
+                            .to_string(),
+                    }
+                };
+                exports
+                    .entry(export.exported_name.clone())
+                    .or_default()
+                    .push(binding);
+            }
         }
-        for targets in exports.values_mut() {
-            targets.sort();
-            targets.dedup();
+        for bindings in exports.values_mut() {
+            bindings.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+            bindings.dedup();
         }
     }
-    (module_exports, deferred_exports)
+    module_exports
 }
 
 struct ResolutionContext<'a> {
@@ -322,9 +437,9 @@ struct ResolutionContext<'a> {
     symbols_by_path: &'a BTreeMap<String, BTreeMap<String, Vec<String>>>,
     symbol_kinds: &'a BTreeMap<String, String>,
     module_exports: &'a ModuleExports,
-    deferred_exports: &'a DeferredExports,
     known_paths: &'a BTreeSet<String>,
     external_ids: &'a BTreeMap<String, String>,
+    module_resolver: &'a ModuleResolver,
 }
 
 fn resolve_calls(
@@ -332,6 +447,7 @@ fn resolve_calls(
     resolution: &ResolutionContext<'_>,
     edges: &mut Vec<GraphEdge>,
 ) {
+    let mut export_cache = BTreeMap::<(String, String), ResolutionOutcome>::new();
     for fact in facts {
         let Some(file_id) = resolution.file_ids.get(&fact.path) else {
             continue;
@@ -346,7 +462,7 @@ fn resolve_calls(
                 file_id,
                 resolution.symbols_by_path,
             );
-            let outcome = resolve_call(&fact.path, &call, &imports, resolution);
+            let outcome = resolve_call(&fact.path, &call, &imports, resolution, &mut export_cache);
             if outcome.status == "resolved"
                 && let Some(target) = outcome.candidates.first()
             {
@@ -403,6 +519,7 @@ struct ResolutionOutcome {
     status: String,
     reason: String,
     candidates: Vec<String>,
+    namespace_modules: Vec<String>,
 }
 
 fn resolve_call(
@@ -410,6 +527,7 @@ fn resolve_call(
     call: &crate::model::TypeScriptCall,
     imports: &[crate::model::TypeScriptImport],
     resolution: &ResolutionContext<'_>,
+    export_cache: &mut BTreeMap<(String, String), ResolutionOutcome>,
 ) -> ResolutionOutcome {
     if call.dynamic {
         return unresolved("dynamic-callee");
@@ -443,7 +561,9 @@ fn resolve_call(
                 path,
                 import,
                 import.imported_name.as_deref().unwrap_or("default"),
+                false,
                 resolution,
+                export_cache,
             );
         }
         let candidates = callable_candidates(
@@ -472,8 +592,8 @@ fn resolve_call(
             .iter()
             .filter(|import| {
                 import.local_name.as_deref() == Some(receiver)
-                    && import.kind == "namespace-import"
                     && import.kind != "re-export"
+                    && import.kind != "side-effect-import"
             })
             .collect::<Vec<_>>();
         if matching_imports.len() > 1 {
@@ -488,7 +608,7 @@ fn resolve_call(
         if import.type_only {
             return unresolved("type-only-binding");
         }
-        return resolve_import_target(path, import, property, resolution);
+        return resolve_import_target(path, import, property, true, resolution, export_cache);
     }
     unresolved("unsupported-callee-form")
 }
@@ -497,57 +617,362 @@ fn resolve_import_target(
     current_path: &str,
     import: &crate::model::TypeScriptImport,
     imported_name: &str,
+    member_call: bool,
     resolution: &ResolutionContext<'_>,
+    export_cache: &mut BTreeMap<(String, String), ResolutionOutcome>,
 ) -> ResolutionOutcome {
-    if is_non_relative_alias(&import.specifier, resolution.known_paths) {
+    if !import.specifier.starts_with('.')
+        && resolution.module_resolver.basis.root_config.is_none()
+        && is_non_relative_alias(&import.specifier, resolution.known_paths)
+    {
         return unresolved("non-relative-path-alias");
     }
-    if !import.specifier.starts_with('.') {
-        return ResolutionOutcome {
+    let Some(target_path) = resolve_import_module(current_path, &import.specifier, resolution)
+    else {
+        return resolve_external_or_unresolved(&import.specifier, resolution);
+    };
+    let mut result = if !member_call || import.kind == "namespace-import" {
+        resolve_export(
+            &target_path,
+            imported_name,
+            resolution,
+            &mut Vec::new(),
+            export_cache,
+        )
+    } else {
+        let binding = resolve_export(
+            &target_path,
+            import.imported_name.as_deref().unwrap_or("default"),
+            resolution,
+            &mut Vec::new(),
+            export_cache,
+        );
+        if binding.namespace_modules.is_empty() {
+            unresolved("unsupported-member-call")
+        } else {
+            let mut outcomes = binding
+                .namespace_modules
+                .iter()
+                .map(|module| {
+                    resolve_export(
+                        module,
+                        imported_name,
+                        resolution,
+                        &mut Vec::new(),
+                        export_cache,
+                    )
+                })
+                .collect::<Vec<_>>();
+            combine_outcomes(&mut outcomes)
+        }
+    };
+    if !result.namespace_modules.is_empty() && result.candidates.is_empty() {
+        result = unresolved("namespace-called-as-function");
+    }
+    result.candidates = callable_candidates(result.candidates, resolution.symbol_kinds);
+    if result.status == "resolved" && result.candidates.is_empty() {
+        result = unresolved("non-callable-export");
+    } else if result.status == "ambiguous" && result.candidates.is_empty() {
+        result = unresolved_with_status("non-callable-export", "ambiguous");
+    }
+    if result.status == "resolved"
+        && matches!(
+            result.reason.as_str(),
+            "re-export-binding" | "local-export-binding"
+        )
+    {
+        let through_reexport = result.reason == "re-export-binding";
+        result.reason = match (import.kind.as_str(), through_reexport) {
+            ("named-import", true) => "named-import-through-reexport".to_string(),
+            ("default-import", true) => "default-import-through-reexport".to_string(),
+            ("namespace-import", true) => "namespace-import-through-reexport".to_string(),
+            ("named-import", false) => "named-import-binding".to_string(),
+            ("default-import", false) => "default-import-binding".to_string(),
+            ("namespace-import", false) => "namespace-import-binding".to_string(),
+            (_, true) => "direct-import-through-reexport".to_string(),
+            _ => "direct-import-binding".to_string(),
+        };
+    }
+    result
+}
+
+fn resolve_import_module(
+    current_path: &str,
+    specifier: &str,
+    resolution: &ResolutionContext<'_>,
+) -> Option<String> {
+    if specifier.starts_with('.') {
+        return resolve_relative(current_path, specifier, resolution.known_paths);
+    }
+    match resolution
+        .module_resolver
+        .resolve_non_relative(specifier, resolution.known_paths)
+    {
+        NonRelativeResolution::Local(path) => Some(path),
+        NonRelativeResolution::External | NonRelativeResolution::Unresolved(_) => None,
+    }
+}
+
+fn resolve_external_or_unresolved(
+    specifier: &str,
+    resolution: &ResolutionContext<'_>,
+) -> ResolutionOutcome {
+    if specifier.starts_with('.') {
+        return unresolved("missing-relative-module");
+    }
+    if resolution.module_resolver.basis.root_config.is_none()
+        && is_non_relative_alias(specifier, resolution.known_paths)
+    {
+        return unresolved("non-relative-path-alias");
+    }
+    match resolution
+        .module_resolver
+        .resolve_non_relative(specifier, resolution.known_paths)
+    {
+        NonRelativeResolution::External => ResolutionOutcome {
             status: "external".to_string(),
             reason: "external-module".to_string(),
             candidates: resolution
                 .external_ids
-                .get(&import.specifier)
+                .get(specifier)
                 .cloned()
                 .into_iter()
                 .collect(),
+            namespace_modules: Vec::new(),
+        },
+        NonRelativeResolution::Unresolved(reason)
+            if is_non_relative_alias(specifier, resolution.known_paths)
+                || !reason.starts_with("tsconfig-resolution-") =>
+        {
+            unresolved(&reason)
+        }
+        NonRelativeResolution::Unresolved(_) => ResolutionOutcome {
+            status: "external".to_string(),
+            reason: "external-module".to_string(),
+            candidates: resolution
+                .external_ids
+                .get(specifier)
+                .cloned()
+                .into_iter()
+                .collect(),
+            namespace_modules: Vec::new(),
+        },
+        NonRelativeResolution::Local(_) => unresolved("module-resolution-inconsistent"),
+    }
+}
+
+fn resolve_export(
+    path: &str,
+    name: &str,
+    resolution: &ResolutionContext<'_>,
+    stack: &mut Vec<(String, String)>,
+    cache: &mut BTreeMap<(String, String), ResolutionOutcome>,
+) -> ResolutionOutcome {
+    let key = (path.to_string(), name.to_string());
+    if stack.iter().any(|item| item == &key) {
+        return unresolved("re-export-cycle");
+    }
+    if stack.len() >= MAX_REEXPORT_DEPTH {
+        return unresolved("re-export-depth-capped");
+    }
+    if let Some(cached) = cache.get(&key) {
+        return cached.clone();
+    }
+    stack.push((path.to_string(), name.to_string()));
+    let Some(exports) = resolution.module_exports.get(path) else {
+        stack.pop();
+        let result = unresolved("missing-relative-module");
+        if cache.len() < MAX_RESOLUTION_RECORDS {
+            cache.insert(key, result.clone());
+        }
+        return result;
+    };
+    let explicit = exports.get(name).cloned().unwrap_or_default();
+    let explicit_is_empty = explicit.is_empty();
+    let bindings = if explicit_is_empty {
+        exports.get("*").cloned().unwrap_or_default()
+    } else {
+        explicit
+    };
+    let has_star = explicit_is_empty && !bindings.is_empty();
+    let mut candidates = Vec::new();
+    let mut namespace_modules = Vec::new();
+    let mut saw_external = false;
+    let mut reasons = Vec::new();
+    let mut traversed_reexport = false;
+    for binding in bindings {
+        match binding {
+            ExportBinding::Local(ids) => candidates.extend(ids),
+            ExportBinding::TypeOnly => reasons.push("type-only-export".to_string()),
+            ExportBinding::Namespace { source } => {
+                traversed_reexport = true;
+                match resolve_import_module(path, &source, resolution) {
+                    Some(target) => namespace_modules.push(target),
+                    None => {
+                        let outcome = resolve_external_or_unresolved(&source, resolution);
+                        saw_external |= outcome.status == "external";
+                        reasons.push(outcome.reason);
+                    }
+                }
+            }
+            ExportBinding::Forward { source, name } => {
+                traversed_reexport = true;
+                match resolve_import_module(path, &source, resolution) {
+                    Some(target) => {
+                        let outcome = resolve_export(&target, &name, resolution, stack, cache);
+                        candidates.extend(outcome.candidates);
+                        namespace_modules.extend(outcome.namespace_modules);
+                        reasons.push(outcome.reason);
+                    }
+                    None => {
+                        let outcome = resolve_external_or_unresolved(&source, resolution);
+                        saw_external |= outcome.status == "external";
+                        reasons.push(outcome.reason);
+                    }
+                }
+            }
+            ExportBinding::Star { source } => {
+                traversed_reexport = true;
+                if name == "default" {
+                    continue;
+                }
+                match resolve_import_module(path, &source, resolution) {
+                    Some(target) => {
+                        let outcome = resolve_export(&target, name, resolution, stack, cache);
+                        candidates.extend(outcome.candidates);
+                        namespace_modules.extend(outcome.namespace_modules);
+                        reasons.push(outcome.reason);
+                    }
+                    None => {
+                        let outcome = resolve_external_or_unresolved(&source, resolution);
+                        saw_external |= outcome.status == "external";
+                        reasons.push(outcome.reason);
+                    }
+                }
+            }
+        }
+    }
+    stack.pop();
+    candidates.sort();
+    candidates.dedup();
+    namespace_modules.sort();
+    namespace_modules.dedup();
+    let result = if candidates.is_empty() && namespace_modules.is_empty() {
+        if saw_external {
+            ResolutionOutcome {
+                status: "external".to_string(),
+                reason: "external-reexport".to_string(),
+                candidates: Vec::new(),
+                namespace_modules: Vec::new(),
+            }
+        } else {
+            let reason = if reasons.iter().any(|reason| reason == "type-only-export") {
+                "type-only-export"
+            } else if has_star {
+                if reasons
+                    .iter()
+                    .any(|reason| reason == "re-export-depth-capped")
+                {
+                    "re-export-depth-capped"
+                } else if reasons.iter().any(|reason| reason == "re-export-cycle") {
+                    "re-export-cycle"
+                } else {
+                    "missing-reexport"
+                }
+            } else if reasons
+                .iter()
+                .any(|reason| reason == "re-export-depth-capped")
+            {
+                "re-export-depth-capped"
+            } else if reasons.iter().any(|reason| reason == "re-export-cycle") {
+                "re-export-cycle"
+            } else {
+                "missing-export"
+            };
+            unresolved(reason)
+        }
+    } else if candidates.len() > 1 {
+        ResolutionOutcome {
+            status: "ambiguous".to_string(),
+            reason: if has_star {
+                "ambiguous-star-reexport".to_string()
+            } else {
+                "ambiguous-reexport".to_string()
+            },
+            candidates,
+            namespace_modules,
+        }
+    } else if candidates.len() == 1 {
+        ResolutionOutcome {
+            status: "resolved".to_string(),
+            reason: if traversed_reexport
+                || reasons.iter().any(|reason| reason == "re-export-binding")
+                || has_star
+            {
+                "re-export-binding".to_string()
+            } else {
+                "local-export-binding".to_string()
+            },
+            candidates,
+            namespace_modules,
+        }
+    } else {
+        ResolutionOutcome {
+            status: "resolved".to_string(),
+            reason: "namespace-reexport".to_string(),
+            candidates: Vec::new(),
+            namespace_modules,
+        }
+    };
+    if cache.len() < MAX_RESOLUTION_RECORDS {
+        cache.insert(key, result.clone());
+    }
+    result
+}
+
+fn combine_outcomes(outcomes: &mut [ResolutionOutcome]) -> ResolutionOutcome {
+    let mut candidates = outcomes
+        .iter()
+        .flat_map(|outcome| outcome.candidates.iter().cloned())
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.dedup();
+    let mut namespaces = outcomes
+        .iter()
+        .flat_map(|outcome| outcome.namespace_modules.iter().cloned())
+        .collect::<Vec<_>>();
+    namespaces.sort();
+    namespaces.dedup();
+    if candidates.len() > 1 {
+        return ResolutionOutcome {
+            status: "ambiguous".to_string(),
+            reason: "ambiguous-namespace-member".to_string(),
+            candidates,
+            namespace_modules: namespaces,
         };
     }
-    let Some(target_path) =
-        resolve_relative(current_path, &import.specifier, resolution.known_paths)
-    else {
-        return unresolved("missing-relative-module");
-    };
-    let Some(exports) = resolution.module_exports.get(&target_path) else {
-        return unresolved("missing-relative-module");
-    };
-    let candidates = callable_candidates(
-        exports.get(imported_name).cloned().unwrap_or_default(),
-        resolution.symbol_kinds,
-    );
-    if candidates.is_empty() {
-        let deferred = resolution
-            .deferred_exports
-            .contains(&(target_path.clone(), imported_name.to_string()))
-            || resolution
-                .deferred_exports
-                .contains(&(target_path, "*".to_string()));
-        return unresolved(if deferred {
-            "re-export-resolution-deferred"
-        } else {
-            "missing-export"
-        });
+    if candidates.len() == 1 {
+        return ResolutionOutcome {
+            status: "resolved".to_string(),
+            reason: "namespace-member-binding".to_string(),
+            candidates,
+            namespace_modules: namespaces,
+        };
     }
-    unique_or_unresolved(
-        candidates,
-        match import.kind.as_str() {
-            "named-import" => "named-import-binding",
-            "default-import" => "default-import-binding",
-            "namespace-import" => "namespace-import-binding",
-            _ => "direct-import-binding",
-        },
-    )
+    if outcomes.iter().any(|outcome| outcome.status == "external") {
+        return ResolutionOutcome {
+            status: "external".to_string(),
+            reason: "external-reexport".to_string(),
+            candidates: Vec::new(),
+            namespace_modules: namespaces,
+        };
+    }
+    let reason = outcomes
+        .iter()
+        .find(|outcome| outcome.status == "unresolved")
+        .map(|outcome| outcome.reason.clone())
+        .unwrap_or_else(|| "missing-export".to_string());
+    unresolved(&reason)
 }
 
 fn callable_candidates(
@@ -581,12 +1006,14 @@ fn unique_or_unresolved(candidates: Vec<String>, reason: &str) -> ResolutionOutc
             status: "resolved".to_string(),
             reason: reason.to_string(),
             candidates: vec![candidate.clone()],
+            namespace_modules: Vec::new(),
         },
         [] => unresolved("unresolved-identifier"),
         _ => ResolutionOutcome {
             status: "ambiguous".to_string(),
             reason: "ambiguous-symbol".to_string(),
             candidates,
+            namespace_modules: Vec::new(),
         },
     }
 }
@@ -600,6 +1027,7 @@ fn unresolved_with_status(reason: &str, status: &str) -> ResolutionOutcome {
         status: status.to_string(),
         reason: reason.to_string(),
         candidates: Vec::new(),
+        namespace_modules: Vec::new(),
     }
 }
 
@@ -860,36 +1288,7 @@ pub fn resolve_relative(
     specifier: &str,
     known_paths: &BTreeSet<String>,
 ) -> Option<String> {
-    if !specifier.starts_with('.') {
-        return None;
-    }
-    let current_parent = Path::new(current).parent().unwrap_or_else(|| Path::new(""));
-    let joined = current_parent.join(specifier);
-    let mut base = Vec::new();
-    for component in joined.components() {
-        match component {
-            Component::Normal(value) => base.push(value.to_str()?.to_string()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                base.pop()?;
-            }
-            Component::RootDir | Component::Prefix(_) => return None,
-        }
-    }
-    let base = base.join("/");
-    let candidates = [
-        base.clone(),
-        format!("{base}.ts"),
-        format!("{base}.tsx"),
-        format!("{base}.d.ts"),
-        format!("{base}/index.ts"),
-        format!("{base}/index.tsx"),
-        format!("{base}/index.d.ts"),
-    ];
-    candidates
-        .iter()
-        .find(|candidate| known_paths.contains(*candidate))
-        .cloned()
+    resolve_module_relative(current, specifier, known_paths)
 }
 
 fn is_non_relative_alias(specifier: &str, known_paths: &BTreeSet<String>) -> bool {
@@ -1037,6 +1436,170 @@ mod tests {
     }
 
     #[test]
+    fn tsconfig_paths_resolve_alias_imports_without_global_name_fallback() {
+        let root = temp_root("tsconfig-paths");
+        fs::create_dir_all(root.join("src/payments")).expect("mkdir");
+        fs::write(
+            root.join("tsconfig.json"),
+            r#"{
+              // JSONC config is supported.
+              "compilerOptions": {
+                "baseUrl": ".",
+                "paths": { "@payments/*": ["src/payments/*"] },
+              },
+            }"#,
+        )
+        .expect("config");
+        fs::write(
+            root.join("src/payments/charge.ts"),
+            "export function charge() { return 1; }",
+        )
+        .expect("charge");
+        fs::write(
+            root.join("src/checkout.ts"),
+            "import { charge } from '@payments/charge'; export function checkout() { charge(); }",
+        )
+        .expect("checkout");
+        let (graph, facts) = build(&root).expect("graph");
+        assert_eq!(graph.module_resolution.status, "complete");
+        assert_eq!(
+            graph.module_resolution.root_config.as_deref(),
+            Some("tsconfig.json")
+        );
+        assert!(
+            graph
+                .module_resolution
+                .config_files
+                .iter()
+                .all(|file| !file.path.contains('\\') && !file.path.starts_with('/'))
+        );
+        let checkout = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/checkout.ts")
+                    && node.name.as_deref() == Some("checkout")
+            })
+            .expect("checkout node");
+        let charge = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/payments/charge.ts")
+                    && node.name.as_deref() == Some("charge")
+            })
+            .expect("charge node");
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == checkout.id && edge.to == charge.id && edge.kind == "calls"
+        }));
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|edge| { edge.kind == "imports" && edge.evidence == "tsconfig-path-alias" })
+        );
+        assert!(
+            facts
+                .iter()
+                .find(|fact| fact.path == "src/checkout.ts")
+                .is_some_and(|fact| {
+                    fact.resolution_records.iter().any(|record| {
+                        record.status == "resolved" && record.reason == "named-import-binding"
+                    })
+                })
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reexport_cycles_and_star_collisions_are_explicitly_ambiguous() {
+        let root = temp_root("reexport-ambiguity");
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(root.join("src/one.ts"), "export function charge() {}").expect("one");
+        fs::write(root.join("src/two.ts"), "export function charge() {}").expect("two");
+        fs::write(
+            root.join("src/ambiguous.ts"),
+            "export * from './one'; export * from './two';",
+        )
+        .expect("ambiguous barrel");
+        fs::write(
+            root.join("src/consumer.ts"),
+            "import { charge } from './ambiguous'; export function run() { charge(); }",
+        )
+        .expect("consumer");
+        fs::write(
+            root.join("src/cycle-a.ts"),
+            "export { charge } from './cycle-b';",
+        )
+        .expect("cycle a");
+        fs::write(
+            root.join("src/cycle-b.ts"),
+            "export { charge } from './cycle-a';",
+        )
+        .expect("cycle b");
+        fs::write(
+            root.join("src/cycle-consumer.ts"),
+            "import { charge } from './cycle-a'; export function run() { charge(); }",
+        )
+        .expect("cycle consumer");
+        let (graph, facts) = build(&root).expect("graph");
+        let consumer = facts
+            .iter()
+            .find(|fact| fact.path == "src/consumer.ts")
+            .expect("consumer facts");
+        assert!(consumer.resolution_records.iter().any(|record| {
+            record.status == "ambiguous" && record.reason == "ambiguous-star-reexport"
+        }));
+        let cycle_consumer = facts
+            .iter()
+            .find(|fact| fact.path == "src/cycle-consumer.ts")
+            .expect("cycle consumer facts");
+        assert!(
+            cycle_consumer.resolution_records.iter().any(|record| {
+                record.status == "unresolved" && record.reason == "re-export-cycle"
+            })
+        );
+        assert!(!graph.edges.iter().any(|edge| edge.kind == "calls" && {
+            graph
+                .nodes
+                .iter()
+                .any(|node| node.id == edge.from && node.path.as_deref() == Some("src/consumer.ts"))
+        }));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reexport_chain_depth_is_bounded_without_guessing() {
+        let root = temp_root("reexport-depth");
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(root.join("src/leaf.ts"), "export function charge() {}").expect("leaf");
+        let mut next = "leaf".to_string();
+        for index in (0..MAX_REEXPORT_DEPTH + 2).rev() {
+            let current = format!("barrel{index}");
+            fs::write(
+                root.join(format!("src/{current}.ts")),
+                format!("export {{ charge }} from './{next}';"),
+            )
+            .expect("barrel");
+            next = current;
+        }
+        fs::write(
+            root.join("src/consumer.ts"),
+            format!("import {{ charge }} from './{next}'; export function run() {{ charge(); }}"),
+        )
+        .expect("consumer");
+        let (_, facts) = build(&root).expect("graph");
+        let consumer = facts
+            .iter()
+            .find(|fact| fact.path == "src/consumer.ts")
+            .expect("consumer facts");
+        assert!(consumer.resolution_records.iter().any(|record| {
+            record.status == "unresolved" && record.reason == "re-export-depth-capped"
+        }));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn resolves_default_namespace_and_reports_conservative_import_outcomes() {
         let root = temp_root("resolution-forms");
         fs::create_dir_all(root.join("src")).expect("mkdir");
@@ -1075,6 +1638,21 @@ mod tests {
             "import { charge } from './barrel'; import { charge as forwarded } from './barrel-local'; export function run() { charge(); forwarded(); }",
         )
         .expect("reexport consumer");
+        fs::write(
+            root.join("src/namespace-barrel.ts"),
+            "export * as payments from './payment';",
+        )
+        .expect("namespace barrel");
+        fs::write(
+            root.join("src/namespace-local-barrel.ts"),
+            "import * as payments from './payment'; export { payments as forwarded };",
+        )
+        .expect("namespace local barrel");
+        fs::write(
+            root.join("src/namespace-consumer.ts"),
+            "import { payments } from './namespace-barrel'; import { forwarded } from './namespace-local-barrel'; export function run() { payments.charge(); forwarded.charge(); }",
+        )
+        .expect("namespace consumer");
 
         let (graph, facts) = build(&root).expect("graph");
         let entry = facts
@@ -1139,8 +1717,25 @@ mod tests {
             .iter()
             .find(|fact| fact.path == "src/reexport-consumer.ts")
             .expect("reexport facts");
+        assert!(
+            reexport
+                .resolution_records
+                .iter()
+                .filter(|record| {
+                    record.status == "resolved" && record.reason == "named-import-through-reexport"
+                })
+                .count()
+                >= 2
+        );
+        let namespace_consumer = facts
+            .iter()
+            .find(|fact| fact.path == "src/namespace-consumer.ts")
+            .expect("namespace consumer facts");
+        assert!(namespace_consumer.resolution_records.iter().any(|record| {
+            record.status == "resolved" && record.reason == "namespace-member-binding"
+        }));
         assert!(reexport.resolution_records.iter().any(|record| {
-            record.status == "unresolved" && record.reason == "re-export-resolution-deferred"
+            record.status == "resolved" && record.reason == "named-import-through-reexport"
         }));
         assert_eq!(graph.resolution_evidence.status, "complete");
         assert!(

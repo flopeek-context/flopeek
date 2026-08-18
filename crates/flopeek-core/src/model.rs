@@ -8,18 +8,18 @@ use serde::{Deserialize, Serialize};
 
 pub const PRODUCT_IDENTITY: &str = "flopeek-repository-memory";
 pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v1";
-pub const GRAPH_SCHEMA: &str = "flopeek-graph/v3";
+pub const GRAPH_SCHEMA: &str = "flopeek-graph/v4";
 pub const CONTEXT_REF_SCHEMA: &str = "flopeek-context-ref/v2";
-pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v3";
-pub const STORE_SCHEMA: &str = "flopeek-sqlite/v2";
-pub const TYPESCRIPT_FACTS_SCHEMA: &str = "flopeek-typescript-facts/v2";
-pub const TYPESCRIPT_RESOLUTION_SCHEMA: &str = "flopeek-typescript-resolution/v1";
+pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v4";
+pub const STORE_SCHEMA: &str = "flopeek-sqlite/v3";
+pub const TYPESCRIPT_FACTS_SCHEMA: &str = "flopeek-typescript-facts/v3";
+pub const TYPESCRIPT_RESOLUTION_SCHEMA: &str = "flopeek-typescript-resolution/v2";
 pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v2";
 pub const DIAGNOSTIC_ASSERTION_SCHEMA: &str = "flopeek-diagnostic-assertion/v2";
 pub const HISTORICAL_CANDIDATE_SCHEMA: &str = "flopeek-historical-candidate/v2";
 pub const HISTORICAL_DIAGNOSIS_SCHEMA: &str = "flopeek-historical-diagnosis/v1";
 pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v2";
-pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v3";
+pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v4";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -132,6 +132,44 @@ pub struct ResolutionEvidence {
     pub omissions: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleResolutionConfigFile {
+    pub path: String,
+    pub bytes: u64,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleResolutionBasis {
+    pub schema_version: String,
+    pub status: String,
+    pub root_config: Option<String>,
+    pub config_files: Vec<ModuleResolutionConfigFile>,
+    pub exact_fingerprint: String,
+    pub effective_fingerprint: String,
+    pub limitations: Vec<String>,
+    pub omissions: Vec<String>,
+}
+
+impl Default for ModuleResolutionBasis {
+    fn default() -> Self {
+        Self {
+            schema_version: "flopeek-typescript-module-resolution/v1".to_string(),
+            status: "unavailable".to_string(),
+            root_config: None,
+            config_files: Vec::new(),
+            exact_fingerprint: String::new(),
+            effective_fingerprint: String::new(),
+            limitations: vec!["module-resolution-basis-unavailable".to_string()],
+            omissions: Vec::new(),
+        }
+    }
+}
+
 impl Default for ResolutionEvidence {
     fn default() -> Self {
         Self {
@@ -184,6 +222,8 @@ pub struct GraphSnapshot {
     pub edges: Vec<GraphEdge>,
     #[serde(default)]
     pub resolution_evidence: ResolutionEvidence,
+    #[serde(default)]
+    pub module_resolution: ModuleResolutionBasis,
     pub truncated: bool,
     pub omissions: Vec<String>,
 }
@@ -285,6 +325,14 @@ pub struct GraphObservation {
     pub source_fingerprint: String,
     pub source_manifest: Vec<SourceFile>,
     pub dirty: bool,
+    #[serde(default)]
+    pub module_resolution_status: String,
+    #[serde(default)]
+    pub module_resolution_fingerprint: String,
+    #[serde(default)]
+    pub module_resolution_effective_fingerprint: String,
+    #[serde(default)]
+    pub module_resolution_manifest: Vec<ModuleResolutionConfigFile>,
     pub observed_at: u64,
 }
 
@@ -376,6 +424,8 @@ pub struct HistoricalSnapshot {
     pub edges: Vec<GraphEdge>,
     #[serde(default)]
     pub resolution_evidence: ResolutionEvidence,
+    #[serde(default)]
+    pub module_resolution: ModuleResolutionBasis,
     pub truncated: bool,
     pub omissions: Vec<String>,
 }

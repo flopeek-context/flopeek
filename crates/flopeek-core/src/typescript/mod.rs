@@ -1,8 +1,8 @@
 //! TypeScript and TSX structural facts.
 //!
-//! The parser reports bounded syntax facts and binding information. It does not
-//! execute modules, follow re-export chains, resolve dynamic dispatch, infer
-//! runtime causality, or persist source text.
+//! The parser reports bounded syntax facts and binding information. Module
+//! resolution is assembled by the graph layer; dynamic dispatch, runtime
+//! causality, and source-text persistence remain unsupported.
 
 use crate::discovery::language_for_path;
 use crate::model::{
@@ -66,10 +66,6 @@ fn parse_tree(
     if root.has_error() {
         unsupported.push("tree-sitter-recovered-syntax".to_string());
     }
-    if exports.iter().any(|export| export.source.is_some()) {
-        unsupported.push("re-export-resolution-deferred".to_string());
-    }
-
     for declaration in declarations
         .iter()
         .filter(|declaration| declaration.exported)
@@ -345,7 +341,31 @@ fn parse_export_statement(
         }
     }
 
-    if node
+    if let Some(namespace_export) = trimmed
+        .strip_prefix("export * as ")
+        .and_then(|rest| rest.split_once(" from "))
+    {
+        let exported_name = namespace_export.0.trim().trim_end_matches(';');
+        if !exported_name.is_empty() {
+            exports.push(TypeScriptExport {
+                exported_name: exported_name.to_string(),
+                local_name: None,
+                kind: "namespace-re-export".to_string(),
+                source: source_specifier.clone(),
+                type_only,
+            });
+        }
+        if let Some(specifier) = source_specifier {
+            imports.push(TypeScriptImport {
+                specifier,
+                kind: "re-export".to_string(),
+                position: position(node),
+                local_name: Some(exported_name.to_string()),
+                imported_name: Some("*".to_string()),
+                type_only,
+            });
+        }
+    } else if node
         .named_child(0)
         .is_some_and(|child| child.kind() == "namespace_export")
         || trimmed.contains("export *")
@@ -721,9 +741,10 @@ import * as payments from './payments';
 import './side-effect';
 import type { Receipt } from './types';
 export { debit as charge };
-export { charge as reexported } from './payment';
-export * from './payments';
-export default function () { return defaultValue(); }
+ export { charge as reexported } from './payment';
+ export * from './payments';
+ export * as paymentNamespace from './payment';
+ export default function () { return defaultValue(); }
 "#,
             "hash-imports",
         )
@@ -766,6 +787,11 @@ export default function () { return defaultValue(); }
         }));
         assert!(facts.exports.iter().any(|item| {
             item.kind == "re-export" && item.exported_name == "*" && item.source.is_some()
+        }));
+        assert!(facts.exports.iter().any(|item| {
+            item.kind == "namespace-re-export"
+                && item.exported_name == "paymentNamespace"
+                && item.source.as_deref() == Some("./payment")
         }));
         assert!(
             facts

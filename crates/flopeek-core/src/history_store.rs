@@ -198,6 +198,7 @@ mod tests {
             nodes: Vec::new(),
             edges: Vec::new(),
             resolution_evidence: crate::model::ResolutionEvidence::default(),
+            module_resolution: crate::model::ModuleResolutionBasis::default(),
             truncated: false,
             omissions: Vec::new(),
         };

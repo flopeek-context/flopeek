@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 blake3 = "1.8.2"
+jsonc-parser = { version = "0.33.1", features = ["serde"] }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value", "preserve_order"] }
