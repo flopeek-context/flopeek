@@ -35,3 +35,7 @@ The P1 maturity coverage also verifies:
 All flow paths are static traversals over proven parser edges. The fixture does
 not claim command invocation, execution order, runtime behavior, or business
 intent.
+
+Rust source and tests are the verification authority for this fixture. The
+repository gate is `cargo fmt --all --check`, locked Clippy, locked workspace
+tests, product-contract validation, and the clean-fixture JSONL smoke surface.
