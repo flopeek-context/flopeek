@@ -1653,6 +1653,73 @@ mod tests {
     }
 
     #[test]
+    fn method_body_change_stales_only_method_and_member_addition_stales_class() {
+        let root = fixture_root();
+        fs::write(
+            root.join("src/payment.ts"),
+            "export class Payment { private secret() { return 1; } sibling() { return 2; } }\n",
+        )
+        .expect("class");
+        let (snapshot, facts) = graph::build(&root).expect("build initial");
+        let first = persist_scan(&root, snapshot, &facts).expect("persist initial");
+        let ref_for = |name: &str| {
+            first
+                .context_refs
+                .iter()
+                .find(|candidate| {
+                    first.graph.nodes.iter().any(|node| {
+                        node.id == candidate.node_id
+                            && node.path.as_deref() == Some("src/payment.ts")
+                            && node.name.as_deref() == Some(name)
+                    })
+                })
+                .expect("context ref")
+                .uri
+                .clone()
+        };
+        let class_ref = ref_for("Payment");
+        let secret_ref = ref_for("method:Payment.secret");
+        let sibling_ref = ref_for("method:Payment.sibling");
+
+        fs::write(
+            root.join("src/payment.ts"),
+            "// formatting only\nexport class Payment { private secret() { return 3; } sibling() { return 2; } }\n",
+        )
+        .expect("method body");
+        let (snapshot, facts) = graph::build(&root).expect("build changed");
+        persist_scan(&root, snapshot, &facts).expect("persist changed");
+        assert_eq!(
+            resolve_context(&root, &secret_ref).expect("secret").status,
+            "stale"
+        );
+        assert_eq!(
+            resolve_context(&root, &sibling_ref)
+                .expect("sibling")
+                .status,
+            "current"
+        );
+        assert_eq!(
+            resolve_context(&root, &class_ref).expect("class").status,
+            "current"
+        );
+
+        fs::write(
+            root.join("src/payment.ts"),
+            "export class Payment { private secret() { return 3; } sibling() { return 2; } added() {} }\n",
+        )
+        .expect("member addition");
+        let (snapshot, facts) = graph::build(&root).expect("build member addition");
+        persist_scan(&root, snapshot, &facts).expect("persist member addition");
+        assert_eq!(
+            resolve_context(&root, &class_ref)
+                .expect("class after addition")
+                .status,
+            "stale"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn identical_structure_across_revision_gets_new_observation_and_reuses_graph_version() {
         let root = fixture_root();
         git(&root, &["init"]);

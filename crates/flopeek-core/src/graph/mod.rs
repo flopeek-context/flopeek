@@ -7,7 +7,7 @@ use crate::module_resolution::{
 
 use crate::model::{
     GraphEdge, GraphNode, GraphSnapshot, PRODUCT_IDENTITY, ResolutionEvidence, SourceFile,
-    SymbolResolution, TYPESCRIPT_RESOLUTION_SCHEMA, TypeScriptFacts,
+    SymbolResolution, TYPESCRIPT_RESOLUTION_SCHEMA, TypeScriptDeclaration, TypeScriptFacts,
 };
 use crate::typescript;
 use serde::Serialize;
@@ -20,15 +20,27 @@ pub const MAX_GRAPH_NODES: usize = 50_000;
 pub const MAX_GRAPH_EDGES: usize = 100_000;
 pub const MAX_RESOLUTION_RECORDS: usize = 100_000;
 pub const MAX_REEXPORT_DEPTH: usize = 32;
-pub const GRAPH_DERIVATION_ID: &str = "typescript-structural-evidence-v4";
+pub const GRAPH_DERIVATION_ID: &str = "typescript-structural-evidence-v5";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ExportBinding {
     Local(Vec<String>),
-    Forward { source: String, name: String },
-    Star { source: String },
-    Namespace { source: String },
-    TypeOnly,
+    Forward {
+        source: String,
+        name: String,
+        type_only: bool,
+    },
+    Star {
+        source: String,
+        type_only: bool,
+    },
+    Namespace {
+        source: String,
+        type_only: bool,
+    },
+    TypeOnly {
+        ids: Vec<String>,
+    },
 }
 
 type ModuleExports = BTreeMap<String, BTreeMap<String, Vec<ExportBinding>>>;
@@ -53,6 +65,8 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
     let mut edges = Vec::new();
     let mut file_ids = BTreeMap::new();
     let mut symbols_by_path = BTreeMap::<String, BTreeMap<String, Vec<String>>>::new();
+    let mut members_by_owner = BTreeMap::<String, BTreeMap<String, Vec<String>>>::new();
+    let mut declarations_by_id = BTreeMap::<String, TypeScriptDeclaration>::new();
     let mut symbol_kinds = BTreeMap::<String, String>::new();
     let known_paths = files
         .iter()
@@ -88,28 +102,57 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
                     id: id.clone(),
                     kind: normalized_kind.clone(),
                     path: Some(fact.path.clone()),
-                    name: Some(declaration.name.clone()),
+                    name: Some(if declaration.owner.is_some() {
+                        qualified_name.clone()
+                    } else {
+                        declaration.name.clone()
+                    }),
                     language: Some(fact.language.clone()),
                     evidence_fingerprint: String::new(),
                 });
             }
             symbol_kinds.insert(id.clone(), normalized_kind);
-            symbols_by_path
-                .entry(fact.path.clone())
-                .or_default()
-                .entry(declaration.name.clone())
-                .or_default()
-                .push(id.clone());
-            edges.push(GraphEdge {
-                from: file_id.clone(),
-                to: id,
-                kind: "declares".to_string(),
-                evidence: "top-level-typescript-declaration".to_string(),
-            });
+            declarations_by_id
+                .entry(id.clone())
+                .or_insert_with(|| declaration.clone());
+            if let Some(owner) = declaration.owner.as_deref() {
+                let owner_id = node_id("symbol", &fact.path, owner);
+                members_by_owner
+                    .entry(owner_id.clone())
+                    .or_default()
+                    .entry(declaration.name.clone())
+                    .or_default()
+                    .push(id.clone());
+                edges.push(GraphEdge {
+                    from: owner_id,
+                    to: id,
+                    kind: "declares-member".to_string(),
+                    evidence: "typescript-class-member".to_string(),
+                });
+            } else {
+                symbols_by_path
+                    .entry(fact.path.clone())
+                    .or_default()
+                    .entry(declaration.name.clone())
+                    .or_default()
+                    .push(id.clone());
+                edges.push(GraphEdge {
+                    from: file_id.clone(),
+                    to: id,
+                    kind: "declares".to_string(),
+                    evidence: "top-level-typescript-declaration".to_string(),
+                });
+            }
         }
     }
     for symbols in symbols_by_path.values_mut() {
         for ids in symbols.values_mut() {
+            ids.sort();
+            ids.dedup();
+        }
+    }
+    for members in members_by_owner.values_mut() {
+        for ids in members.values_mut() {
             ids.sort();
             ids.dedup();
         }
@@ -240,6 +283,8 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
     let resolution = ResolutionContext {
         file_ids: &file_ids,
         symbols_by_path: &symbols_by_path,
+        members_by_owner: &members_by_owner,
+        declarations_by_id: &declarations_by_id,
         symbol_kinds: &symbol_kinds,
         module_exports: &module_exports,
         known_paths: &known_paths,
@@ -247,6 +292,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
         module_resolver: &module_resolver,
     };
     resolve_calls(&mut facts, &resolution, &mut edges);
+    resolve_heritage(&mut facts, &resolution, &mut edges);
 
     nodes.sort_by(|left, right| left.id.cmp(&right.id));
     edges.sort_by(|left, right| {
@@ -356,21 +402,16 @@ fn build_module_exports(
         let local_symbols = symbols_by_path.get(&fact.path);
         let exports = module_exports.entry(fact.path.clone()).or_default();
         for export in &fact.exports {
-            if export.type_only {
-                exports
-                    .entry(export.exported_name.clone())
-                    .or_default()
-                    .push(ExportBinding::TypeOnly);
-                continue;
-            }
             if let Some(source) = export.source.as_deref() {
                 let binding = if export.kind == "namespace-re-export" {
                     ExportBinding::Namespace {
                         source: source.to_string(),
+                        type_only: export.type_only,
                     }
                 } else if export.exported_name == "*" {
                     ExportBinding::Star {
                         source: source.to_string(),
+                        type_only: export.type_only,
                     }
                 } else {
                     ExportBinding::Forward {
@@ -380,6 +421,7 @@ fn build_module_exports(
                             .as_deref()
                             .unwrap_or(&export.exported_name)
                             .to_string(),
+                        type_only: export.type_only,
                     }
                 };
                 exports
@@ -395,7 +437,13 @@ fn build_module_exports(
                 exports
                     .entry(export.exported_name.clone())
                     .or_default()
-                    .push(ExportBinding::Local(targets.clone()));
+                    .push(if export.type_only {
+                        ExportBinding::TypeOnly {
+                            ids: targets.clone(),
+                        }
+                    } else {
+                        ExportBinding::Local(targets.clone())
+                    });
                 continue;
             }
             if let Some(import) = fact.imports.iter().find(|import| {
@@ -407,6 +455,7 @@ fn build_module_exports(
                 let binding = if import.kind == "namespace-import" {
                     ExportBinding::Namespace {
                         source: import.specifier.clone(),
+                        type_only: export.type_only || import.type_only,
                     }
                 } else {
                     ExportBinding::Forward {
@@ -416,6 +465,7 @@ fn build_module_exports(
                             .as_deref()
                             .unwrap_or("default")
                             .to_string(),
+                        type_only: export.type_only || import.type_only,
                     }
                 };
                 exports
@@ -435,6 +485,8 @@ fn build_module_exports(
 struct ResolutionContext<'a> {
     file_ids: &'a BTreeMap<String, String>,
     symbols_by_path: &'a BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    members_by_owner: &'a BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    declarations_by_id: &'a BTreeMap<String, TypeScriptDeclaration>,
     symbol_kinds: &'a BTreeMap<String, String>,
     module_exports: &'a ModuleExports,
     known_paths: &'a BTreeSet<String>,
@@ -461,6 +513,7 @@ fn resolve_calls(
                 call.caller.as_deref(),
                 file_id,
                 resolution.symbols_by_path,
+                resolution.symbol_kinds,
             );
             let outcome = resolve_call(&fact.path, &call, &imports, resolution, &mut export_cache);
             if outcome.status == "resolved"
@@ -469,7 +522,11 @@ fn resolve_calls(
                 edges.push(GraphEdge {
                     from: caller_id.clone(),
                     to: target.clone(),
-                    kind: "calls".to_string(),
+                    kind: if call.callee_form == "constructor" {
+                        "constructs".to_string()
+                    } else {
+                        "calls".to_string()
+                    },
                     evidence: outcome.reason.clone(),
                 });
             }
@@ -488,11 +545,185 @@ fn resolve_calls(
     }
 }
 
+fn resolve_heritage(
+    facts: &mut [TypeScriptFacts],
+    resolution: &ResolutionContext<'_>,
+    edges: &mut Vec<GraphEdge>,
+) {
+    let mut export_cache = BTreeMap::<(String, String), ResolutionOutcome>::new();
+    for fact in facts {
+        let heritage_items = fact.heritage.clone();
+        for heritage in heritage_items {
+            let owner_id = node_id("symbol", &fact.path, &heritage.owner);
+            let mut outcome = resolve_type_reference(
+                &fact.path,
+                &heritage,
+                &fact.imports,
+                resolution,
+                &mut export_cache,
+            );
+            if outcome.status == "resolved" {
+                let allowed = heritage_target_kinds(&heritage);
+                outcome.candidates.retain(|candidate| {
+                    resolution
+                        .symbol_kinds
+                        .get(candidate)
+                        .is_some_and(|kind| allowed.contains(kind.as_str()))
+                });
+                outcome.candidates.sort();
+                outcome.candidates.dedup();
+                if outcome.candidates.len() > 1 {
+                    outcome.status = "ambiguous".to_string();
+                    outcome.reason = "ambiguous-heritage-target".to_string();
+                } else if outcome.candidates.is_empty() {
+                    outcome.status = "unresolved".to_string();
+                    outcome.reason = "unsupported-heritage-target-kind".to_string();
+                }
+            }
+            if outcome.status == "resolved"
+                && let Some(target) = outcome.candidates.first()
+            {
+                edges.push(GraphEdge {
+                    from: owner_id.clone(),
+                    to: target.clone(),
+                    kind: heritage.relation.clone(),
+                    evidence: format!("typescript-heritage-{}", heritage.relation),
+                });
+            }
+            fact.resolution_records.push(SymbolResolution {
+                path: fact.path.clone(),
+                caller_node_id: owner_id,
+                reference: heritage.reference,
+                form: format!("heritage-{}-{}", heritage.relation, heritage.form),
+                status: outcome.status,
+                reason: outcome.reason,
+                candidate_node_ids: outcome.candidates,
+                occurrence_count: 1,
+            });
+        }
+        coalesce_resolutions(&mut fact.resolution_records);
+    }
+}
+
+fn heritage_target_kinds(heritage: &crate::model::TypeScriptHeritage) -> BTreeSet<&'static str> {
+    match (
+        heritage.owner.split_once(':').map(|parts| parts.0),
+        heritage.relation.as_str(),
+    ) {
+        (Some("class"), "extends") => BTreeSet::from(["class"]),
+        (_, "implements") => BTreeSet::from(["class", "interface"]),
+        (_, "extends") => BTreeSet::from(["class", "interface"]),
+        _ => BTreeSet::new(),
+    }
+}
+
+fn resolve_type_reference(
+    path: &str,
+    heritage: &crate::model::TypeScriptHeritage,
+    imports: &[crate::model::TypeScriptImport],
+    resolution: &ResolutionContext<'_>,
+    export_cache: &mut BTreeMap<(String, String), ResolutionOutcome>,
+) -> ResolutionOutcome {
+    if heritage.form == "dynamic" {
+        return unresolved("dynamic-heritage-unsupported");
+    }
+    let reference = heritage.reference.as_str();
+    if heritage.form == "identifier" {
+        let local = resolution
+            .symbols_by_path
+            .get(path)
+            .and_then(|symbols| symbols.get(reference))
+            .cloned()
+            .unwrap_or_default();
+        if !local.is_empty() {
+            return unique_or_unresolved(local, "local-heritage-binding");
+        }
+        let matching_imports = imports
+            .iter()
+            .filter(|import| {
+                import.local_name.as_deref() == Some(reference)
+                    && import.kind != "re-export"
+                    && import.kind != "side-effect-import"
+            })
+            .collect::<Vec<_>>();
+        if matching_imports.len() > 1 {
+            return unresolved_with_status("ambiguous-import-binding", "ambiguous");
+        }
+        let Some(import) = matching_imports.first().copied() else {
+            return unresolved("missing-heritage-binding");
+        };
+        if import.kind == "namespace-import" {
+            return unresolved("namespace-heritage-binding");
+        }
+        let mut result = resolve_import_raw(
+            path,
+            import,
+            import.imported_name.as_deref().unwrap_or("default"),
+            resolution,
+            export_cache,
+        );
+        if result.type_only
+            && heritage.owner.starts_with("class:")
+            && heritage.relation == "extends"
+        {
+            result = unresolved("type-only-extends-binding");
+        }
+        return result;
+    }
+    let Some((receiver, property)) = reference.split_once('.') else {
+        return unresolved("unsupported-heritage-reference");
+    };
+    let matching_imports = imports
+        .iter()
+        .filter(|import| {
+            import.local_name.as_deref() == Some(receiver)
+                && import.kind == "namespace-import"
+                && !import.type_only
+        })
+        .collect::<Vec<_>>();
+    if matching_imports.len() > 1 {
+        return unresolved_with_status("ambiguous-import-binding", "ambiguous");
+    }
+    let Some(import) = matching_imports.first().copied() else {
+        return unresolved("unsupported-heritage-reference");
+    };
+    resolve_import_raw(path, import, property, resolution, export_cache)
+}
+
+fn resolve_import_raw(
+    current_path: &str,
+    import: &crate::model::TypeScriptImport,
+    imported_name: &str,
+    resolution: &ResolutionContext<'_>,
+    export_cache: &mut BTreeMap<(String, String), ResolutionOutcome>,
+) -> ResolutionOutcome {
+    if !import.specifier.starts_with('.')
+        && resolution.module_resolver.basis.root_config.is_none()
+        && is_non_relative_alias(&import.specifier, resolution.known_paths)
+    {
+        return unresolved("non-relative-path-alias");
+    }
+    let Some(target_path) = resolve_import_module(current_path, &import.specifier, resolution)
+    else {
+        return resolve_external_or_unresolved(&import.specifier, resolution);
+    };
+    let mut result = resolve_export(
+        &target_path,
+        imported_name,
+        resolution,
+        &mut Vec::new(),
+        export_cache,
+    );
+    result.type_only |= import.type_only;
+    result
+}
+
 fn caller_node_id(
     path: &str,
     caller: Option<&str>,
     file_id: &str,
     symbols_by_path: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    symbol_kinds: &BTreeMap<String, String>,
 ) -> String {
     let Some(caller) = caller else {
         return file_id.to_string();
@@ -500,6 +731,10 @@ fn caller_node_id(
     let Some(symbols) = symbols_by_path.get(path) else {
         return file_id.to_string();
     };
+    let direct_id = node_id("symbol", path, caller);
+    if symbol_kinds.contains_key(&direct_id) {
+        return direct_id;
+    }
     let Some((kind, name)) = caller.split_once(':') else {
         return file_id.to_string();
     };
@@ -520,6 +755,7 @@ struct ResolutionOutcome {
     reason: String,
     candidates: Vec<String>,
     namespace_modules: Vec<String>,
+    type_only: bool,
 }
 
 fn resolve_call(
@@ -530,11 +766,33 @@ fn resolve_call(
     export_cache: &mut BTreeMap<(String, String), ResolutionOutcome>,
 ) -> ResolutionOutcome {
     if call.dynamic {
-        return unresolved("dynamic-callee");
+        return unresolved(if call.callee_form == "dynamic-constructor" {
+            "dynamic-constructor"
+        } else {
+            "dynamic-callee"
+        });
     }
     let Some(callee) = call.callee.as_deref() else {
         return unresolved("dynamic-callee");
     };
+    if call.callee_form == "constructor" {
+        return resolve_constructor_call(path, callee, imports, call, resolution, export_cache);
+    }
+    if call.callee_form == "this-member" {
+        let Some(receiver) = call.receiver.as_deref() else {
+            return unresolved("unsupported-member-call");
+        };
+        let Some(property) = callee
+            .strip_prefix(receiver)
+            .and_then(|value| value.strip_prefix('.'))
+        else {
+            return unresolved("computed-member-unsupported");
+        };
+        if call.shadowed {
+            return unresolved("local-binding-shadowed-this");
+        }
+        return resolve_private_this_member(path, property, call, resolution);
+    }
     if call.callee_form == "identifier" {
         let matching_imports = imports
             .iter()
@@ -588,6 +846,9 @@ fn resolve_call(
         else {
             return unresolved("unsupported-member-call");
         };
+        if let Some(local_class) = local_class_candidates(path, receiver, resolution) {
+            return resolve_static_member(&local_class, property, resolution);
+        }
         let matching_imports = imports
             .iter()
             .filter(|import| {
@@ -608,9 +869,278 @@ fn resolve_call(
         if import.type_only {
             return unresolved("type-only-binding");
         }
-        return resolve_import_target(path, import, property, true, resolution, export_cache);
+        if import.kind == "namespace-import" {
+            return resolve_import_target(path, import, property, true, resolution, export_cache);
+        }
+        let binding = resolve_import_raw(
+            path,
+            import,
+            import.imported_name.as_deref().unwrap_or("default"),
+            resolution,
+            export_cache,
+        );
+        if !binding.namespace_modules.is_empty() {
+            let mut outcomes = binding
+                .namespace_modules
+                .iter()
+                .map(|module| {
+                    resolve_export(module, property, resolution, &mut Vec::new(), export_cache)
+                })
+                .collect::<Vec<_>>();
+            let mut namespace = combine_outcomes(&mut outcomes);
+            namespace.candidates =
+                callable_candidates(namespace.candidates, resolution.symbol_kinds);
+            if namespace.status == "resolved" && namespace.candidates.is_empty() {
+                return unresolved("non-callable-export");
+            }
+            return namespace;
+        }
+        if binding.status != "resolved" {
+            return binding;
+        }
+        let class_candidates = binding
+            .candidates
+            .into_iter()
+            .filter(|candidate| {
+                resolution
+                    .symbol_kinds
+                    .get(candidate)
+                    .is_some_and(|kind| kind == "class")
+            })
+            .collect::<Vec<_>>();
+        if class_candidates.len() != 1 {
+            return if class_candidates.is_empty() {
+                unresolved("static-member-on-non-class")
+            } else {
+                unresolved_with_status("ambiguous-class-binding", "ambiguous")
+            };
+        }
+        return resolve_static_member(&class_candidates, property, resolution);
     }
     unresolved("unsupported-callee-form")
+}
+
+fn resolve_private_this_member(
+    path: &str,
+    property: &str,
+    call: &crate::model::TypeScriptCall,
+    resolution: &ResolutionContext<'_>,
+) -> ResolutionOutcome {
+    let Some(owner_name) = call.enclosing_type.as_deref() else {
+        return unresolved("this-member-outside-class");
+    };
+    let owner_id = node_id("symbol", path, &format!("class:{owner_name}"));
+    let Some(members) = resolution.members_by_owner.get(&owner_id) else {
+        return unresolved("missing-class-member");
+    };
+    let candidates = members
+        .get(property)
+        .into_iter()
+        .flat_map(|ids| ids.iter())
+        .filter(|id| {
+            resolution
+                .declarations_by_id
+                .get(*id)
+                .is_some_and(|declaration| {
+                    !declaration.static_member
+                        && declaration.visibility == "private"
+                        && declaration.kind != "constructor"
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if candidates.len() == 1 {
+        return ResolutionOutcome {
+            status: "resolved".to_string(),
+            reason: "same-class-private-method".to_string(),
+            candidates,
+            namespace_modules: Vec::new(),
+            type_only: false,
+        };
+    }
+    if candidates.len() > 1 {
+        return unresolved_with_candidates("ambiguous-private-method", "ambiguous", candidates);
+    }
+    if members.contains_key(property) {
+        unresolved("potentially-polymorphic-this-call")
+    } else {
+        unresolved("missing-class-member")
+    }
+}
+
+fn local_class_candidates(
+    path: &str,
+    name: &str,
+    resolution: &ResolutionContext<'_>,
+) -> Option<Vec<String>> {
+    let candidates = resolution
+        .symbols_by_path
+        .get(path)
+        .and_then(|symbols| symbols.get(name))?
+        .iter()
+        .filter(|candidate| {
+            resolution
+                .symbol_kinds
+                .get(*candidate)
+                .is_some_and(|kind| kind == "class")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    Some(candidates)
+}
+
+fn resolve_static_member(
+    classes: &[String],
+    property: &str,
+    resolution: &ResolutionContext<'_>,
+) -> ResolutionOutcome {
+    let mut candidates = Vec::new();
+    let mut saw_member = false;
+    for class in classes {
+        if let Some(members) = resolution.members_by_owner.get(class)
+            && let Some(ids) = members.get(property)
+        {
+            saw_member = true;
+            candidates.extend(
+                ids.iter()
+                    .filter(|id| {
+                        resolution
+                            .declarations_by_id
+                            .get(*id)
+                            .is_some_and(|declaration| declaration.static_member)
+                    })
+                    .cloned(),
+            );
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    if candidates.len() == 1 {
+        return ResolutionOutcome {
+            status: "resolved".to_string(),
+            reason: "static-class-method".to_string(),
+            candidates,
+            namespace_modules: Vec::new(),
+            type_only: false,
+        };
+    }
+    if candidates.len() > 1 {
+        return unresolved_with_candidates("ambiguous-static-method", "ambiguous", candidates);
+    }
+    unresolved(if saw_member {
+        "static-member-not-found"
+    } else {
+        "missing-class-member"
+    })
+}
+
+fn resolve_constructor_call(
+    path: &str,
+    callee: &str,
+    imports: &[crate::model::TypeScriptImport],
+    call: &crate::model::TypeScriptCall,
+    resolution: &ResolutionContext<'_>,
+    export_cache: &mut BTreeMap<(String, String), ResolutionOutcome>,
+) -> ResolutionOutcome {
+    if call.shadowed {
+        return unresolved("local-binding-shadowed-constructor");
+    }
+    let mut class_candidates = local_class_candidates(path, callee, resolution).unwrap_or_default();
+    if class_candidates.len() > 1 {
+        return unresolved_with_candidates(
+            "ambiguous-class-binding",
+            "ambiguous",
+            class_candidates,
+        );
+    }
+    if class_candidates.is_empty() {
+        let matching_imports = imports
+            .iter()
+            .filter(|import| {
+                import.local_name.as_deref() == Some(callee)
+                    && import.kind != "re-export"
+                    && import.kind != "side-effect-import"
+            })
+            .collect::<Vec<_>>();
+        if matching_imports.len() > 1 {
+            return unresolved_with_status("ambiguous-import-binding", "ambiguous");
+        }
+        let Some(import) = matching_imports.first().copied() else {
+            return unresolved("missing-class-binding");
+        };
+        if import.type_only {
+            return unresolved("type-only-constructor-binding");
+        }
+        let target = resolve_import_target(
+            path,
+            import,
+            import.imported_name.as_deref().unwrap_or("default"),
+            false,
+            resolution,
+            export_cache,
+        );
+        if target.status != "resolved" {
+            return target;
+        }
+        class_candidates = target
+            .candidates
+            .into_iter()
+            .filter(|candidate| {
+                resolution
+                    .symbol_kinds
+                    .get(candidate)
+                    .is_some_and(|kind| kind == "class")
+            })
+            .collect();
+    }
+    if class_candidates.len() != 1 {
+        return if class_candidates.is_empty() {
+            unresolved("constructor-target-not-class")
+        } else {
+            unresolved_with_candidates("ambiguous-class-binding", "ambiguous", class_candidates)
+        };
+    }
+    let class = &class_candidates[0];
+    let Some(members) = resolution.members_by_owner.get(class) else {
+        return ResolutionOutcome {
+            status: "resolved".to_string(),
+            reason: "implicit-default-constructor".to_string(),
+            candidates: vec![class.clone()],
+            namespace_modules: Vec::new(),
+            type_only: false,
+        };
+    };
+    let constructors = members
+        .get("constructor")
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|candidate| {
+            resolution
+                .declarations_by_id
+                .get(candidate)
+                .is_some_and(|declaration| declaration.kind == "constructor")
+        })
+        .collect::<Vec<_>>();
+    if constructors.len() == 1 {
+        ResolutionOutcome {
+            status: "resolved".to_string(),
+            reason: "explicit-constructor".to_string(),
+            candidates: constructors,
+            namespace_modules: Vec::new(),
+            type_only: false,
+        }
+    } else if constructors.len() > 1 {
+        unresolved_with_candidates("ambiguous-constructor", "ambiguous", constructors)
+    } else {
+        ResolutionOutcome {
+            status: "resolved".to_string(),
+            reason: "implicit-default-constructor".to_string(),
+            candidates: vec![class.clone()],
+            namespace_modules: Vec::new(),
+            type_only: false,
+        }
+    }
 }
 
 fn resolve_import_target(
@@ -668,6 +1198,9 @@ fn resolve_import_target(
     };
     if !result.namespace_modules.is_empty() && result.candidates.is_empty() {
         result = unresolved("namespace-called-as-function");
+    }
+    if result.type_only {
+        return unresolved("type-only-binding");
     }
     result.candidates = callable_candidates(result.candidates, resolution.symbol_kinds);
     if result.status == "resolved" && result.candidates.is_empty() {
@@ -739,6 +1272,7 @@ fn resolve_external_or_unresolved(
                 .into_iter()
                 .collect(),
             namespace_modules: Vec::new(),
+            type_only: false,
         },
         NonRelativeResolution::Unresolved(reason)
             if is_non_relative_alias(specifier, resolution.known_paths)
@@ -756,6 +1290,7 @@ fn resolve_external_or_unresolved(
                 .into_iter()
                 .collect(),
             namespace_modules: Vec::new(),
+            type_only: false,
         },
         NonRelativeResolution::Local(_) => unresolved("module-resolution-inconsistent"),
     }
@@ -800,11 +1335,20 @@ fn resolve_export(
     let mut saw_external = false;
     let mut reasons = Vec::new();
     let mut traversed_reexport = false;
+    let mut type_only = false;
     for binding in bindings {
         match binding {
             ExportBinding::Local(ids) => candidates.extend(ids),
-            ExportBinding::TypeOnly => reasons.push("type-only-export".to_string()),
-            ExportBinding::Namespace { source } => {
+            ExportBinding::TypeOnly { ids } => {
+                type_only = true;
+                candidates.extend(ids);
+                reasons.push("type-only-export".to_string());
+            }
+            ExportBinding::Namespace {
+                source,
+                type_only: binding_type_only,
+            } => {
+                type_only |= binding_type_only;
                 traversed_reexport = true;
                 match resolve_import_module(path, &source, resolution) {
                     Some(target) => namespace_modules.push(target),
@@ -815,13 +1359,19 @@ fn resolve_export(
                     }
                 }
             }
-            ExportBinding::Forward { source, name } => {
+            ExportBinding::Forward {
+                source,
+                name,
+                type_only: binding_type_only,
+            } => {
+                type_only |= binding_type_only;
                 traversed_reexport = true;
                 match resolve_import_module(path, &source, resolution) {
                     Some(target) => {
                         let outcome = resolve_export(&target, &name, resolution, stack, cache);
                         candidates.extend(outcome.candidates);
                         namespace_modules.extend(outcome.namespace_modules);
+                        type_only |= outcome.type_only;
                         reasons.push(outcome.reason);
                     }
                     None => {
@@ -831,7 +1381,11 @@ fn resolve_export(
                     }
                 }
             }
-            ExportBinding::Star { source } => {
+            ExportBinding::Star {
+                source,
+                type_only: binding_type_only,
+            } => {
+                type_only |= binding_type_only;
                 traversed_reexport = true;
                 if name == "default" {
                     continue;
@@ -841,6 +1395,7 @@ fn resolve_export(
                         let outcome = resolve_export(&target, name, resolution, stack, cache);
                         candidates.extend(outcome.candidates);
                         namespace_modules.extend(outcome.namespace_modules);
+                        type_only |= outcome.type_only;
                         reasons.push(outcome.reason);
                     }
                     None => {
@@ -864,6 +1419,7 @@ fn resolve_export(
                 reason: "external-reexport".to_string(),
                 candidates: Vec::new(),
                 namespace_modules: Vec::new(),
+                type_only,
             }
         } else {
             let reason = if reasons.iter().any(|reason| reason == "type-only-export") {
@@ -901,6 +1457,7 @@ fn resolve_export(
             },
             candidates,
             namespace_modules,
+            type_only,
         }
     } else if candidates.len() == 1 {
         ResolutionOutcome {
@@ -915,6 +1472,7 @@ fn resolve_export(
             },
             candidates,
             namespace_modules,
+            type_only,
         }
     } else {
         ResolutionOutcome {
@@ -922,6 +1480,7 @@ fn resolve_export(
             reason: "namespace-reexport".to_string(),
             candidates: Vec::new(),
             namespace_modules,
+            type_only,
         }
     };
     if cache.len() < MAX_RESOLUTION_RECORDS {
@@ -943,12 +1502,14 @@ fn combine_outcomes(outcomes: &mut [ResolutionOutcome]) -> ResolutionOutcome {
         .collect::<Vec<_>>();
     namespaces.sort();
     namespaces.dedup();
+    let type_only = outcomes.iter().any(|outcome| outcome.type_only);
     if candidates.len() > 1 {
         return ResolutionOutcome {
             status: "ambiguous".to_string(),
             reason: "ambiguous-namespace-member".to_string(),
             candidates,
             namespace_modules: namespaces,
+            type_only,
         };
     }
     if candidates.len() == 1 {
@@ -957,6 +1518,7 @@ fn combine_outcomes(outcomes: &mut [ResolutionOutcome]) -> ResolutionOutcome {
             reason: "namespace-member-binding".to_string(),
             candidates,
             namespace_modules: namespaces,
+            type_only,
         };
     }
     if outcomes.iter().any(|outcome| outcome.status == "external") {
@@ -965,6 +1527,7 @@ fn combine_outcomes(outcomes: &mut [ResolutionOutcome]) -> ResolutionOutcome {
             reason: "external-reexport".to_string(),
             candidates: Vec::new(),
             namespace_modules: namespaces,
+            type_only,
         };
     }
     let reason = outcomes
@@ -1007,6 +1570,7 @@ fn unique_or_unresolved(candidates: Vec<String>, reason: &str) -> ResolutionOutc
             reason: reason.to_string(),
             candidates: vec![candidate.clone()],
             namespace_modules: Vec::new(),
+            type_only: false,
         },
         [] => unresolved("unresolved-identifier"),
         _ => ResolutionOutcome {
@@ -1014,6 +1578,7 @@ fn unique_or_unresolved(candidates: Vec<String>, reason: &str) -> ResolutionOutc
             reason: "ambiguous-symbol".to_string(),
             candidates,
             namespace_modules: Vec::new(),
+            type_only: false,
         },
     }
 }
@@ -1028,6 +1593,23 @@ fn unresolved_with_status(reason: &str, status: &str) -> ResolutionOutcome {
         reason: reason.to_string(),
         candidates: Vec::new(),
         namespace_modules: Vec::new(),
+        type_only: false,
+    }
+}
+
+fn unresolved_with_candidates(
+    reason: &str,
+    status: &str,
+    mut candidates: Vec<String>,
+) -> ResolutionOutcome {
+    candidates.sort();
+    candidates.dedup();
+    ResolutionOutcome {
+        status: status.to_string(),
+        reason: reason.to_string(),
+        candidates,
+        namespace_modules: Vec::new(),
+        type_only: false,
     }
 }
 
@@ -1129,18 +1711,19 @@ fn assign_node_fingerprints(
                     fact.declarations
                         .iter()
                         .filter(|declaration| {
-                            declaration.qualified_name
-                                == format!(
-                                    "{}:{}",
-                                    node.kind,
-                                    node.name.as_deref().unwrap_or_default()
-                                )
-                                || (declaration.qualified_name.is_empty()
-                                    && declaration.name == node.name.as_deref().unwrap_or_default()
-                                    && normalize_symbol_kind(&declaration.kind) == node.kind)
+                            node.path.as_deref().is_some_and(|path| {
+                                node.id == node_id("symbol", path, &declaration.qualified_name)
+                            })
                         })
                         .map(|declaration| {
-                            format!("{}:{}", declaration.ast_fingerprint, declaration.exported)
+                            format!(
+                                "{}:{}:{}:{}:{}",
+                                declaration.ast_fingerprint,
+                                declaration.exported,
+                                declaration.visibility,
+                                declaration.static_member,
+                                declaration.abstract_member
+                            )
                         })
                         .collect::<Vec<_>>()
                 })
@@ -1151,9 +1734,9 @@ fn assign_node_fingerprints(
                 .and_then(|path| facts.iter().find(|fact| fact.path == path))
                 .is_some_and(|fact| {
                     fact.declarations.iter().any(|declaration| {
-                        declaration.name == node.name.as_deref().unwrap_or_default()
-                            && normalize_symbol_kind(&declaration.kind) == node.kind
-                            && declaration.exported
+                        node.path.as_deref().is_some_and(|path| {
+                            node.id == node_id("symbol", path, &declaration.qualified_name)
+                        }) && declaration.exported
                     })
                 });
             let mut declaration_fingerprints = declaration_fingerprints;
@@ -1162,7 +1745,7 @@ fn assign_node_fingerprints(
                 "symbol\0{}\0{}\0{}\0exported={exported}\0ast={}",
                 node.kind,
                 node.path.as_deref().unwrap_or_default(),
-                node.name.as_deref().unwrap_or_default(),
+                node.id,
                 declaration_fingerprints.join("|")
             )
         };
@@ -1432,6 +2015,209 @@ mod tests {
                     })
                 })
         );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn class_semantics_resolve_private_static_constructor_and_heritage_edges() {
+        let root = temp_root("class-semantics");
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("src/payment.ts"),
+            r#"export interface Gateway { charge(): void; }
+export class Base { protected base() {} }
+export class Payment extends Base implements Gateway {
+  private secret() { return 1; }
+  charge() {}
+  visible() { this.secret(); this.visible(); }
+  static create() { return new Payment(); }
+  constructor() {}
+}
+"#,
+        )
+        .expect("payment");
+        fs::write(
+            root.join("src/entry.ts"),
+            "import { Payment as Alias } from './payment'; export function run() { new Alias(); Alias.create(); Alias.visible(); }",
+        )
+        .expect("entry");
+
+        let (graph, facts) = build(&root).expect("graph");
+        let payment_class = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/payment.ts")
+                    && node.kind == "class"
+                    && node.name.as_deref() == Some("Payment")
+            })
+            .expect("payment class");
+        let base_class = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/payment.ts")
+                    && node.kind == "class"
+                    && node.name.as_deref() == Some("Base")
+            })
+            .expect("base class");
+        let gateway = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/payment.ts")
+                    && node.kind == "interface"
+                    && node.name.as_deref() == Some("Gateway")
+            })
+            .expect("gateway interface");
+        let visible = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/payment.ts")
+                    && node.name.as_deref() == Some("method:Payment.visible")
+            })
+            .expect("visible method");
+        let secret = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/payment.ts")
+                    && node.name.as_deref() == Some("method:Payment.secret")
+            })
+            .expect("secret method");
+        let create = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/payment.ts")
+                    && node.name.as_deref() == Some("static_method:Payment.create")
+            })
+            .expect("create method");
+        let constructor = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/payment.ts")
+                    && node.name.as_deref() == Some("constructor:Payment.constructor")
+            })
+            .expect("constructor");
+        let run = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.path.as_deref() == Some("src/entry.ts") && node.name.as_deref() == Some("run")
+            })
+            .expect("run");
+
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == payment_class.id && edge.to == base_class.id && edge.kind == "extends"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == payment_class.id && edge.to == gateway.id && edge.kind == "implements"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == visible.id && edge.to == secret.id && edge.kind == "calls"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == create.id && edge.to == constructor.id && edge.kind == "constructs"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == run.id && edge.to == constructor.id && edge.kind == "constructs"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == run.id
+                && edge.to == create.id
+                && edge.kind == "calls"
+                && edge.evidence == "static-class-method"
+        }));
+
+        let entry = facts
+            .iter()
+            .find(|fact| fact.path == "src/entry.ts")
+            .expect("entry facts");
+        assert!(entry.resolution_records.iter().any(|record| {
+            record.reference == "Alias.visible"
+                && record.status == "unresolved"
+                && record.reason == "static-member-not-found"
+        }));
+        let payment = facts
+            .iter()
+            .find(|fact| fact.path == "src/payment.ts")
+            .expect("payment facts");
+        assert!(payment.resolution_records.iter().any(|record| {
+            record.reference == "this.visible"
+                && record.status == "unresolved"
+                && record.reason == "potentially-polymorphic-this-call"
+        }));
+        assert!(payment.resolution_records.iter().any(|record| {
+            record.reference == "Base"
+                && record.form == "heritage-extends-identifier"
+                && record.status == "resolved"
+        }));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn class_imports_follow_default_named_barrel_and_tsconfig_resolution() {
+        let root = temp_root("class-import-resolution");
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("tsconfig.json"),
+            r#"{
+              "compilerOptions": { "baseUrl": ".", "paths": { "@lib/*": ["src/*"] } }
+            }"#,
+        )
+        .expect("config");
+        fs::write(
+            root.join("src/base.ts"),
+            "export class Payment { static create() {} constructor() {} }",
+        )
+        .expect("base");
+        fs::write(
+            root.join("src/barrel.ts"),
+            "export { Payment as default, Payment as NamedPayment } from './base';",
+        )
+        .expect("barrel");
+        fs::write(
+            root.join("src/entry.ts"),
+            "import DefaultPayment, { NamedPayment as Alias } from '@lib/barrel'; export function run() { new DefaultPayment(); Alias.create(); new Alias(); }",
+        )
+        .expect("entry");
+
+        let (graph, facts) = build(&root).expect("graph");
+        let entry = facts
+            .iter()
+            .find(|fact| fact.path == "src/entry.ts")
+            .expect("entry facts");
+        assert_eq!(graph.module_resolution.status, "complete");
+        assert!(entry.resolution_records.iter().any(|record| {
+            record.reference == "DefaultPayment"
+                && record.form == "constructor"
+                && record.status == "resolved"
+                && record.reason == "explicit-constructor"
+        }));
+        assert!(entry.resolution_records.iter().any(|record| {
+            record.reference == "Alias.create"
+                && record.status == "resolved"
+                && record.reason == "static-class-method"
+        }));
+        assert_eq!(
+            entry
+                .resolution_records
+                .iter()
+                .filter(|record| record.reference == "Alias" && record.form == "constructor")
+                .count(),
+            1
+        );
+        assert!(!graph.edges.iter().any(|edge| {
+            edge.kind == "calls"
+                && graph
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == edge.to)
+                    .is_some_and(|node| node.kind == "external-module")
+        }));
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -1794,6 +2580,7 @@ mod tests {
             unsupported: Vec::new(),
             resolution_records: records,
             canonical_fingerprint: "fingerprint".to_string(),
+            heritage: Vec::new(),
         }];
         let evidence = resolution_evidence(&facts, false);
         assert_eq!(evidence.status, "truncated");
