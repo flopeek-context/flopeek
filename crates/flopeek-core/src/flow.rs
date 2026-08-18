@@ -436,8 +436,11 @@ fn resolve_target(target: &str, files: &[crate::model::SourceFile]) -> Result<St
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
-    if extension == "js" || extension == "jsx" || normalized.ends_with(".d.ts") {
-        return Err("entry-target-javascript-or-declaration-output-unsupported".to_string());
+    if extension == "js" || extension == "jsx" {
+        return Err("entry-target-javascript-output-unsupported".to_string());
+    }
+    if normalized.ends_with(".d.ts") {
+        return Err("entry-target-declaration-file-unsupported".to_string());
     }
     let mut candidates = Vec::new();
     if known.contains(normalized.as_str()) {
