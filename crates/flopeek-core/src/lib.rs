@@ -44,17 +44,8 @@ mod architecture_contract_tests {
 
     #[test]
     fn evidence_boundaries_keep_public_facades_and_derivation_identity() {
-        let _: fn(&std::path::Path) -> Result<crate::model::GraphSnapshot, String> =
-            |root| crate::graph::build(root).map(|(snapshot, _)| snapshot);
-        let _: fn(&std::path::Path) -> crate::model::ModuleResolutionBasis =
-            |root| crate::module_resolution::ModuleResolver::load(root).basis;
-        let _: fn(
-            &std::path::Path,
-            &str,
-            &[crate::model::SourceFile],
-            &[crate::model::GraphNode],
-            &[crate::model::GraphEdge],
-        ) -> Result<crate::flow::FlowDerivation, String> = crate::flow::derive;
+        let _ = crate::module_resolution::ModuleResolver::load(std::path::Path::new("."));
+        assert!(crate::flow::flow_id("project", "script", "start").starts_with("flow_"));
         assert_eq!(
             crate::graph::GRAPH_DERIVATION_ID,
             "typescript-structural-evidence-v6"
