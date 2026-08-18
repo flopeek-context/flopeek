@@ -7,7 +7,7 @@
 use crate::discovery::language_for_path;
 use crate::model::{
     SourcePosition, TYPESCRIPT_FACTS_SCHEMA, TypeScriptCall, TypeScriptDeclaration,
-    TypeScriptExport, TypeScriptFacts, TypeScriptImport,
+    TypeScriptExport, TypeScriptFacts, TypeScriptHeritage, TypeScriptImport,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -43,6 +43,8 @@ fn parse_tree(
     let mut imports = Vec::new();
     let mut declarations = Vec::new();
     let mut exports = Vec::new();
+    let mut heritage = Vec::new();
+    let mut unsupported = Vec::new();
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
         match child.kind() {
@@ -60,15 +62,22 @@ fn parse_tree(
         }
     }
 
+    collect_class_metadata(
+        root,
+        source,
+        &mut declarations,
+        &mut heritage,
+        &mut unsupported,
+    );
+
     let mut calls = Vec::new();
     collect_calls(root, source, &mut calls);
-    let mut unsupported = Vec::new();
     if root.has_error() {
         unsupported.push("tree-sitter-recovered-syntax".to_string());
     }
     for declaration in declarations
         .iter()
-        .filter(|declaration| declaration.exported)
+        .filter(|declaration| declaration.exported && declaration.owner.is_none())
     {
         if !exports.iter().any(|export| {
             export.source.is_none()
@@ -116,6 +125,17 @@ fn parse_tree(
             .then_with(|| left.callee.cmp(&right.callee))
             .then_with(|| left.callee_form.cmp(&right.callee_form))
     });
+    heritage.sort_by(|left, right| {
+        left.owner
+            .cmp(&right.owner)
+            .then_with(|| left.relation.cmp(&right.relation))
+            .then_with(|| left.reference.cmp(&right.reference))
+            .then_with(|| left.form.cmp(&right.form))
+            .then_with(|| left.position.start_line.cmp(&right.position.start_line))
+            .then_with(|| left.position.start_column.cmp(&right.position.start_column))
+    });
+    unsupported.sort();
+    unsupported.dedup();
     Ok(TypeScriptFacts {
         schema_version: TYPESCRIPT_FACTS_SCHEMA.to_string(),
         path: path.to_string(),
@@ -139,6 +159,7 @@ fn parse_tree(
         canonical_fingerprint: blake3::hash(canonical_ast(root, source).as_bytes())
             .to_hex()
             .to_string(),
+        heritage,
     })
 }
 
@@ -410,9 +431,21 @@ fn collect_declarations(
             exported,
             position: position(node),
             qualified_name,
-            ast_fingerprint: blake3::hash(canonical_ast(node, source).as_bytes())
-                .to_hex()
-                .to_string(),
+            ast_fingerprint: blake3::hash(
+                (if type_declaration_kind(node).is_some() {
+                    canonical_type_header(node, source)
+                } else {
+                    canonical_ast(node, source)
+                })
+                .as_bytes(),
+            )
+            .to_hex()
+            .to_string(),
+            owner: None,
+            static_member: false,
+            visibility: String::new(),
+            abstract_member: false,
+            declaration_only: false,
         });
     }
     if matches!(node.kind(), "lexical_declaration" | "ambient_declaration") {
@@ -421,6 +454,247 @@ fn collect_declarations(
             collect_declarations(child, source, exported, None, output);
         }
     }
+}
+
+fn collect_class_metadata(
+    root: Node<'_>,
+    source: &[u8],
+    declarations: &mut Vec<TypeScriptDeclaration>,
+    heritage: &mut Vec<TypeScriptHeritage>,
+    unsupported: &mut Vec<String>,
+) {
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        let declaration = if child.kind() == "export_statement" {
+            exported_child(child).unwrap_or(child)
+        } else {
+            child
+        };
+        let Some(kind) = type_declaration_kind(declaration) else {
+            continue;
+        };
+        let owner_name = declaration_name(declaration, source).or_else(|| {
+            (child.kind() == "export_statement"
+                && node_text(child, source).is_some_and(|text| text.starts_with("export default")))
+            .then(|| "default".to_string())
+        });
+        let Some(owner_name) = owner_name else {
+            unsupported.push("anonymous-class-expression-unsupported".to_string());
+            continue;
+        };
+        let owner = format!("{kind}:{owner_name}");
+        collect_members(
+            declaration,
+            source,
+            kind,
+            &owner_name,
+            declarations,
+            unsupported,
+        );
+        collect_heritage(declaration, source, &owner, kind, heritage, unsupported);
+    }
+}
+
+fn type_declaration_kind(node: Node<'_>) -> Option<&'static str> {
+    match node.kind() {
+        "class_declaration" | "abstract_class_declaration" => Some("class"),
+        "interface_declaration" => Some("interface"),
+        _ => None,
+    }
+}
+
+fn collect_members(
+    declaration: Node<'_>,
+    source: &[u8],
+    owner_kind: &str,
+    owner_name: &str,
+    output: &mut Vec<TypeScriptDeclaration>,
+    unsupported: &mut Vec<String>,
+) {
+    let Some(body) = declaration.child_by_field_name("body") else {
+        return;
+    };
+    let mut cursor = body.walk();
+    for member in body.named_children(&mut cursor) {
+        if !matches!(
+            member.kind(),
+            "method_definition" | "method_signature" | "abstract_method_signature"
+        ) {
+            if matches!(
+                member.kind(),
+                "public_field_definition"
+                    | "class_static_block"
+                    | "index_signature"
+                    | "property_signature"
+                    | "call_signature"
+                    | "construct_signature"
+            ) {
+                unsupported.push(format!(
+                    "{}-{}-unsupported",
+                    owner_kind,
+                    member.kind().replace('_', "-")
+                ));
+            }
+            continue;
+        }
+        let Some(name_node) = member.child_by_field_name("name") else {
+            unsupported.push(format!("{owner_kind}-computed-member-name"));
+            continue;
+        };
+        let Some(name) = member_name(name_node, source) else {
+            unsupported.push(format!("{owner_kind}-computed-member-name"));
+            continue;
+        };
+        let text = node_text(member, source).unwrap_or_default();
+        let words = modifier_words(
+            &text,
+            name_node.start_byte().saturating_sub(member.start_byte()),
+        );
+        let accessor = words.iter().any(|word| word == "get" || word == "set");
+        if accessor {
+            unsupported.push(format!("{owner_kind}-accessor-unsupported"));
+            continue;
+        }
+        let static_member = owner_kind == "class" && words.iter().any(|word| word == "static");
+        let private_member = name.starts_with('#') || words.iter().any(|word| word == "private");
+        let visibility = if private_member {
+            "private"
+        } else if words.iter().any(|word| word == "protected") {
+            "protected"
+        } else if words.iter().any(|word| word == "public") {
+            "public"
+        } else {
+            ""
+        };
+        let abstract_member = member.kind() == "abstract_method_signature"
+            || words.iter().any(|word| word == "abstract");
+        let declaration_only = member.kind() != "method_definition";
+        let is_constructor = owner_kind == "class" && name == "constructor";
+        let kind = if is_constructor {
+            "constructor"
+        } else if owner_kind == "interface" {
+            "method-signature"
+        } else if static_member {
+            "static-method"
+        } else {
+            "method"
+        };
+        let qualified_name = format!("{}:{}.{name}", normalize_symbol_kind(kind), owner_name);
+        output.push(TypeScriptDeclaration {
+            name,
+            kind: kind.to_string(),
+            exported: false,
+            position: position(member),
+            qualified_name,
+            ast_fingerprint: blake3::hash(canonical_ast(member, source).as_bytes())
+                .to_hex()
+                .to_string(),
+            owner: Some(format!("{owner_kind}:{owner_name}")),
+            static_member,
+            visibility: visibility.to_string(),
+            abstract_member,
+            declaration_only,
+        });
+    }
+}
+
+fn collect_heritage(
+    declaration: Node<'_>,
+    source: &[u8],
+    owner: &str,
+    owner_kind: &str,
+    output: &mut Vec<TypeScriptHeritage>,
+    unsupported: &mut Vec<String>,
+) {
+    if owner_kind == "class"
+        && let Some(heritage) = named_child_kind(declaration, "class_heritage")
+    {
+        let mut cursor = heritage.walk();
+        for clause in heritage.named_children(&mut cursor) {
+            let relation = match clause.kind() {
+                "extends_clause" => "extends",
+                "implements_clause" => "implements",
+                _ => continue,
+            };
+            let mut clause_cursor = clause.walk();
+            for reference in clause.named_children(&mut clause_cursor) {
+                if relation == "extends" && reference.kind() == "type_arguments" {
+                    continue;
+                }
+                let (reference_text, form) = heritage_reference(reference, source);
+                if form == "dynamic" {
+                    unsupported.push(format!("dynamic-{relation}-unsupported"));
+                }
+                output.push(TypeScriptHeritage {
+                    owner: owner.to_string(),
+                    relation: relation.to_string(),
+                    reference: reference_text,
+                    form,
+                    position: position(reference),
+                    type_only: false,
+                });
+            }
+        }
+    }
+    if owner_kind == "interface"
+        && let Some(heritage) = named_child_kind(declaration, "extends_type_clause")
+    {
+        let mut cursor = heritage.walk();
+        for reference in heritage.named_children(&mut cursor) {
+            let (reference_text, form) = heritage_reference(reference, source);
+            if form == "dynamic" {
+                unsupported.push("dynamic-interface-extends-unsupported".to_string());
+            }
+            output.push(TypeScriptHeritage {
+                owner: owner.to_string(),
+                relation: "extends".to_string(),
+                reference: reference_text,
+                form,
+                position: position(reference),
+                type_only: false,
+            });
+        }
+    }
+}
+
+fn heritage_reference(node: Node<'_>, source: &[u8]) -> (String, String) {
+    let text = node_text(node, source).unwrap_or_default();
+    let reference = text
+        .split('<')
+        .next()
+        .unwrap_or(text.as_str())
+        .trim()
+        .to_string();
+    let form = if is_simple_identifier(&reference) {
+        "identifier"
+    } else if reference.split('.').all(is_simple_identifier) {
+        "member"
+    } else {
+        "dynamic"
+    };
+    (reference, form.to_string())
+}
+
+fn member_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "property_identifier" | "private_property_identifier" | "identifier" => {
+            node_text(node, source).filter(|text| {
+                is_simple_identifier(text)
+                    || (text.starts_with('#') && is_simple_identifier(text.trim_start_matches('#')))
+            })
+        }
+        _ => None,
+    }
+}
+
+fn modifier_words(text: &str, name_offset: usize) -> Vec<String> {
+    text.get(..name_offset.min(text.len()))
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(|word| word.trim_matches(|character: char| !character.is_ascii_alphabetic()))
+        .filter(|word| !word.is_empty())
+        .map(|word| word.to_ascii_lowercase())
+        .collect()
 }
 
 fn declaration_kind(node: Node<'_>) -> Option<&'static str> {
@@ -456,6 +730,33 @@ fn normalize_symbol_kind(kind: &str) -> String {
 
 fn collect_calls(root: Node<'_>, source: &[u8], output: &mut Vec<TypeScriptCall>) {
     fn visit(node: Node<'_>, root: Node<'_>, source: &[u8], output: &mut Vec<TypeScriptCall>) {
+        if node.kind() == "new_expression" {
+            let constructor = node
+                .child_by_field_name("constructor")
+                .and_then(|constructor| constructor_syntax(constructor, source));
+            let caller = enclosing_owner(node, root, source);
+            let shadowed = constructor.as_ref().is_some_and(|syntax| {
+                syntax
+                    .callee
+                    .as_deref()
+                    .is_some_and(|name| is_shadowed_in_owner(node, root, source, name))
+            });
+            output.push(TypeScriptCall {
+                callee: constructor
+                    .as_ref()
+                    .and_then(|syntax| syntax.callee.clone()),
+                dynamic: constructor.is_none(),
+                position: position(node),
+                caller,
+                callee_form: constructor.as_ref().map_or_else(
+                    || "dynamic-constructor".to_string(),
+                    |syntax| syntax.form.clone(),
+                ),
+                receiver: None,
+                shadowed,
+                enclosing_type: enclosing_type(node, root, source),
+            });
+        }
         if node.kind() != "call_expression" {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
@@ -465,7 +766,7 @@ fn collect_calls(root: Node<'_>, source: &[u8], output: &mut Vec<TypeScriptCall>
         }
         let function = node.child_by_field_name("function");
         let syntax = function.and_then(|function| callee_syntax(function, source));
-        let caller = enclosing_top_level_owner(node, root, source);
+        let caller = enclosing_owner(node, root, source);
         let shadowed = syntax.as_ref().is_some_and(|syntax| {
             syntax
                 .receiver
@@ -483,6 +784,7 @@ fn collect_calls(root: Node<'_>, source: &[u8], output: &mut Vec<TypeScriptCall>
                 .map_or_else(|| "dynamic".to_string(), |syntax| syntax.form.clone()),
             receiver: syntax.and_then(|syntax| syntax.receiver),
             shadowed,
+            enclosing_type: enclosing_type(node, root, source),
         });
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
@@ -501,7 +803,7 @@ struct CalleeSyntax {
 
 fn callee_syntax(node: Node<'_>, source: &[u8]) -> Option<CalleeSyntax> {
     match node.kind() {
-        "identifier" => node_text(node, source).map(|callee| CalleeSyntax {
+        "identifier" | "type_identifier" => node_text(node, source).map(|callee| CalleeSyntax {
             callee: Some(callee),
             form: "identifier".to_string(),
             receiver: None,
@@ -515,14 +817,20 @@ fn callee_syntax(node: Node<'_>, source: &[u8]) -> Option<CalleeSyntax> {
                 .and_then(|value| node_text(value, source));
             match (receiver, property) {
                 (Some(receiver), Some(property))
-                    if is_simple_identifier(&receiver)
-                        && is_simple_identifier(&property)
+                    if (is_simple_identifier(&receiver) || receiver == "this")
+                        && (is_simple_identifier(&property)
+                            || (property.starts_with('#')
+                                && is_simple_identifier(property.trim_start_matches('#'))))
                         && node_text(node, source)
                             .is_some_and(|text| text == format!("{receiver}.{property}")) =>
                 {
                     Some(CalleeSyntax {
                         callee: Some(format!("{receiver}.{property}")),
-                        form: "member".to_string(),
+                        form: if receiver == "this" {
+                            "this-member".to_string()
+                        } else {
+                            "member".to_string()
+                        },
                         receiver: Some(receiver),
                     })
                 }
@@ -531,6 +839,68 @@ fn callee_syntax(node: Node<'_>, source: &[u8]) -> Option<CalleeSyntax> {
         }
         _ => None,
     }
+}
+
+fn constructor_syntax(node: Node<'_>, source: &[u8]) -> Option<CalleeSyntax> {
+    let callee = node_text(node, source)?;
+    if !is_simple_identifier(&callee) {
+        return None;
+    }
+    Some(CalleeSyntax {
+        callee: Some(callee),
+        form: "constructor".to_string(),
+        receiver: None,
+    })
+}
+
+fn enclosing_owner(node: Node<'_>, root: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut current = node;
+    let mut method = None;
+    loop {
+        if matches!(
+            current.kind(),
+            "method_definition" | "method_signature" | "abstract_method_signature"
+        ) {
+            method = Some(current);
+        }
+        let parent = current.parent()?;
+        if let Some(owner_kind) = type_declaration_kind(parent)
+            && let Some(owner_name) = type_owner_name(parent, root, source)
+        {
+            if let Some(method) = method {
+                let Some(name_node) = method.child_by_field_name("name") else {
+                    return Some(format!("{owner_kind}:{owner_name}"));
+                };
+                let Some(name) = member_name(name_node, source) else {
+                    return Some(format!("{owner_kind}:{owner_name}"));
+                };
+                let text = node_text(method, source).unwrap_or_default();
+                let words = modifier_words(
+                    &text,
+                    name_node.start_byte().saturating_sub(method.start_byte()),
+                );
+                let kind = if owner_kind == "class" && name == "constructor" {
+                    "constructor"
+                } else if owner_kind == "interface" {
+                    "method-signature"
+                } else if words.iter().any(|word| word == "static") {
+                    "static-method"
+                } else {
+                    "method"
+                };
+                return Some(format!(
+                    "{}:{owner_name}.{name}",
+                    normalize_symbol_kind(kind)
+                ));
+            }
+            return Some(format!("{owner_kind}:{owner_name}"));
+        }
+        if parent.id() == root.id() {
+            break;
+        }
+        current = parent;
+    }
+    enclosing_top_level_owner(node, root, source)
 }
 
 fn enclosing_top_level_owner(node: Node<'_>, root: Node<'_>, source: &[u8]) -> Option<String> {
@@ -552,6 +922,29 @@ fn enclosing_top_level_owner(node: Node<'_>, root: Node<'_>, source: &[u8]) -> O
         declaration_name(declaration, source)
             .or_else(|| (kind == "function" || kind == "class").then(|| "default".to_string()))
             .map(|name| format!("{}:{name}", normalize_symbol_kind(kind)))
+    })
+}
+
+fn enclosing_type(node: Node<'_>, root: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut current = node;
+    loop {
+        let parent = current.parent()?;
+        if type_declaration_kind(parent).is_some() {
+            return type_owner_name(parent, root, source);
+        }
+        if parent.id() == root.id() {
+            return None;
+        }
+        current = parent;
+    }
+}
+
+fn type_owner_name(node: Node<'_>, root: Node<'_>, source: &[u8]) -> Option<String> {
+    declaration_name(node, source).or_else(|| {
+        let top = top_level_child(node, root)?;
+        (top.kind() == "export_statement"
+            && node_text(top, source).is_some_and(|text| text.starts_with("export default")))
+        .then(|| "default".to_string())
     })
 }
 
@@ -662,6 +1055,22 @@ fn canonical_ast(node: Node<'_>, source: &[u8]) -> String {
     output
 }
 
+fn canonical_type_header(node: Node<'_>, source: &[u8]) -> String {
+    let body_id = node.child_by_field_name("body").map(|body| body.id());
+    let mut output = String::new();
+    output.push('(');
+    output.push_str(node.kind());
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if Some(child.id()) == body_id || child.kind() == "comment" {
+            continue;
+        }
+        output.push_str(&canonical_ast(child, source));
+    }
+    output.push(')');
+    output
+}
+
 fn is_simple_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.chars().enumerate().all(|(index, character)| {
@@ -730,6 +1139,84 @@ mod tests {
         assert_eq!(facts.calls[0].callee.as_deref(), Some("debit"));
         assert_eq!(facts.calls[0].caller.as_deref(), Some("function:checkout"));
         assert_eq!(facts.calls[0].callee_form, "identifier");
+    }
+
+    #[test]
+    fn extracts_class_members_heritage_and_method_call_owners() {
+        let facts = parse(
+            "src/payment.ts",
+            br#"export interface Gateway extends BaseGateway { charge(): void; }
+export abstract class BaseGateway { abstract charge(): void; }
+export class Payment extends BaseGateway implements Gateway {
+  private secret() { return 1; }
+  #hidden() { return 2; }
+  public visible() { this.secret(); this.#hidden(); this.visible(); }
+  static create() { return new Payment(); }
+  constructor() {}
+  overloaded(value: string): void;
+  overloaded(value: number): void;
+  overloaded(value: unknown) {}
+}
+"#,
+            "hash-classes",
+        )
+        .expect("parse classes");
+
+        assert!(facts.declarations.iter().any(|declaration| {
+            declaration.qualified_name == "method:Payment.secret"
+                && declaration.visibility == "private"
+                && declaration.owner.as_deref() == Some("class:Payment")
+        }));
+        assert!(facts.declarations.iter().any(|declaration| {
+            declaration.qualified_name == "method:Payment.#hidden"
+                && declaration.visibility == "private"
+        }));
+        assert!(facts.declarations.iter().any(|declaration| {
+            declaration.qualified_name == "static_method:Payment.create"
+                && declaration.static_member
+        }));
+        assert!(facts.declarations.iter().any(|declaration| {
+            declaration.qualified_name == "constructor:Payment.constructor"
+                && !declaration.declaration_only
+        }));
+        assert_eq!(
+            facts
+                .declarations
+                .iter()
+                .filter(|declaration| declaration.qualified_name == "method:Payment.overloaded")
+                .count(),
+            3
+        );
+        assert!(facts.declarations.iter().any(|declaration| {
+            declaration.qualified_name == "method_signature:Gateway.charge"
+                && declaration.owner.as_deref() == Some("interface:Gateway")
+        }));
+        assert!(facts.heritage.iter().any(|item| {
+            item.owner == "class:Payment"
+                && item.relation == "extends"
+                && item.reference == "BaseGateway"
+        }));
+        assert!(facts.heritage.iter().any(|item| {
+            item.owner == "class:Payment"
+                && item.relation == "implements"
+                && item.reference == "Gateway"
+        }));
+        assert!(facts.heritage.iter().any(|item| {
+            item.owner == "interface:Gateway"
+                && item.relation == "extends"
+                && item.reference == "BaseGateway"
+        }));
+        assert!(facts.calls.iter().any(|call| {
+            call.callee.as_deref() == Some("this.secret")
+                && call.callee_form == "this-member"
+                && call.caller.as_deref() == Some("method:Payment.visible")
+                && call.enclosing_type.as_deref() == Some("Payment")
+        }));
+        assert!(facts.calls.iter().any(|call| {
+            call.callee.as_deref() == Some("Payment")
+                && call.callee_form == "constructor"
+                && call.caller.as_deref() == Some("static_method:Payment.create")
+        }));
     }
 
     #[test]

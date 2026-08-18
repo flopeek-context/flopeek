@@ -58,6 +58,16 @@ invalid-config, and unsupported module references remain explicit in bounded
 graph `resolution_evidence` records and are never guessed. Each observation
 retains config path/hash provenance without storing config bodies.
 
+Class semantics add qualified class members for instance methods, static
+methods, explicit constructors, and interface method signatures. Overload
+declarations coalesce by structural identity. `extends`, `implements`, and
+interface `extends` are structural edges. Private `this` calls, static class
+calls, and statically defensible `new Class()` expressions resolve to symbol
+nodes; default constructors use an explicit `constructs` edge to the class.
+Public or inherited `this` dispatch, `super`, computed members, mixins,
+getters/setters, callable fields, and other dynamic forms remain unresolved
+with deterministic reasons.
+
 Static evidence does not prove runtime behavior or root cause. Dynamic dispatch,
 reflection, generated source, and business intent remain explicitly unavailable.
 

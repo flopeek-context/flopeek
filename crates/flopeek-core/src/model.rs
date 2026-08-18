@@ -8,18 +8,18 @@ use serde::{Deserialize, Serialize};
 
 pub const PRODUCT_IDENTITY: &str = "flopeek-repository-memory";
 pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v1";
-pub const GRAPH_SCHEMA: &str = "flopeek-graph/v4";
+pub const GRAPH_SCHEMA: &str = "flopeek-graph/v5";
 pub const CONTEXT_REF_SCHEMA: &str = "flopeek-context-ref/v2";
-pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v4";
+pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v5";
 pub const STORE_SCHEMA: &str = "flopeek-sqlite/v3";
-pub const TYPESCRIPT_FACTS_SCHEMA: &str = "flopeek-typescript-facts/v3";
-pub const TYPESCRIPT_RESOLUTION_SCHEMA: &str = "flopeek-typescript-resolution/v2";
+pub const TYPESCRIPT_FACTS_SCHEMA: &str = "flopeek-typescript-facts/v4";
+pub const TYPESCRIPT_RESOLUTION_SCHEMA: &str = "flopeek-typescript-resolution/v3";
 pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v2";
 pub const DIAGNOSTIC_ASSERTION_SCHEMA: &str = "flopeek-diagnostic-assertion/v2";
 pub const HISTORICAL_CANDIDATE_SCHEMA: &str = "flopeek-historical-candidate/v2";
 pub const HISTORICAL_DIAGNOSIS_SCHEMA: &str = "flopeek-historical-diagnosis/v1";
 pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v2";
-pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v4";
+pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v5";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +61,16 @@ pub struct TypeScriptDeclaration {
     pub qualified_name: String,
     #[serde(default)]
     pub ast_fingerprint: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub static_member: bool,
+    #[serde(default)]
+    pub visibility: String,
+    #[serde(default)]
+    pub abstract_member: bool,
+    #[serde(default)]
+    pub declaration_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -76,6 +86,19 @@ pub struct TypeScriptCall {
     pub receiver: Option<String>,
     #[serde(default)]
     pub shadowed: bool,
+    #[serde(default)]
+    pub enclosing_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TypeScriptHeritage {
+    pub owner: String,
+    pub relation: String,
+    pub reference: String,
+    pub form: String,
+    pub position: SourcePosition,
+    #[serde(default)]
+    pub type_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -120,6 +143,8 @@ pub struct TypeScriptFacts {
     pub resolution_records: Vec<SymbolResolution>,
     #[serde(default)]
     pub canonical_fingerprint: String,
+    #[serde(default)]
+    pub heritage: Vec<TypeScriptHeritage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

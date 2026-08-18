@@ -22,3 +22,11 @@ indexes. Unresolved, ambiguous, external, dynamic, type-only, cyclic, and
 invalid-config references remain bounded resolution evidence without guessing.
 Nested project configs, project references, package resolution, and package
 exports are explicitly unavailable.
+
+Class semantics expose qualified instance/static method nodes, explicit
+constructor nodes, interface method signatures, and structural `extends` /
+`implements` edges. Overloads coalesce by identity. Private `this` calls,
+static class calls, and statically defensible constructor expressions resolve
+to symbol-level edges; public or inherited dispatch, `super`, computed
+members, mixins, getters/setters, and callable fields remain explicitly
+unresolved.
