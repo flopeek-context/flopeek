@@ -1,6 +1,8 @@
 //! Store behavior tests.
 
-use super::migrations::{migration_v1, migration_v2, migration_v3, migration_v4, migration_v5};
+use super::migrations::{
+    migration_v1, migration_v2, migration_v3, migration_v4, migration_v5, migration_v6,
+};
 use super::*;
 use crate::graph;
 use std::fs;
@@ -67,6 +69,16 @@ fn schema_snapshot(connection: &rusqlite::Connection) -> Vec<(String, String, St
         .expect("schema snapshot")
 }
 
+fn table_columns_from_connection(connection: &rusqlite::Connection, table: &str) -> Vec<String> {
+    connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .expect("table columns")
+        .query_map([], |row| row.get::<_, String>(1))
+        .expect("table column rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("table column values")
+}
+
 fn initialize_v5_database(root: &Path) {
     fs::create_dir_all(root.join(STORE_DIRECTORY)).expect("store directory");
     let mut connection = rusqlite::Connection::open(database_path(root)).expect("sqlite");
@@ -92,6 +104,19 @@ fn initialize_v5_database(root: &Path) {
     }
 }
 
+fn initialize_v6_database(root: &Path) {
+    initialize_v5_database(root);
+    let mut connection = rusqlite::Connection::open(database_path(root)).expect("sqlite v6");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .expect("v6 migration transaction");
+    migration_v6(&transaction).expect("v6");
+    transaction
+        .execute_batch("PRAGMA user_version = 6;")
+        .expect("v6 version");
+    transaction.commit().expect("v6 migration commit");
+}
+
 fn git(root: &Path, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")
@@ -110,3 +135,4 @@ mod flow;
 mod graph_behavior;
 mod legacy;
 mod migration;
+mod temporal;

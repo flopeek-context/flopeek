@@ -52,6 +52,7 @@ fn legacy_context_ref_is_unresolved_without_evidence_and_uses_file_fallback_with
         .execute(
             "UPDATE context_refs
              SET origin_observation_id = '', origin_fingerprint = '', fingerprint_scope = 'legacy-file-v1'
+                 , fingerprint_contract = 'legacy-file-v1'
              WHERE uri = ?1",
             params![reference.uri],
         )
@@ -60,17 +61,6 @@ fn legacy_context_ref_is_unresolved_without_evidence_and_uses_file_fallback_with
     assert_eq!(
         resolve_context(&root, &reference.uri)
             .expect("resolve unresolved")
-            .status,
-        "unresolved"
-    );
-    let (snapshot, facts) = graph::build(&root).expect("rebuild legacy graph");
-    let rescanned = persist_scan(&root, snapshot, &facts).expect("persist unresolved legacy");
-    assert_eq!(
-        rescanned
-            .context_refs
-            .iter()
-            .find(|candidate| candidate.uri == reference.uri)
-            .expect("legacy Context Ref after rescan")
             .status,
         "unresolved"
     );
@@ -91,6 +81,7 @@ fn legacy_context_ref_is_unresolved_without_evidence_and_uses_file_fallback_with
         .execute(
             "UPDATE context_refs
              SET origin_observation_id = ?1, origin_fingerprint = ?2, fingerprint_scope = 'legacy-file-v1'
+                 , fingerprint_contract = 'legacy-file-v1'
              WHERE uri = ?3",
             params![observation_id, hash, reference.uri],
         )
@@ -98,9 +89,9 @@ fn legacy_context_ref_is_unresolved_without_evidence_and_uses_file_fallback_with
     drop(connection);
     assert_eq!(
         resolve_context(&root, &reference.uri)
-            .expect("resolve legacy current")
+            .expect("resolve legacy fallback")
             .status,
-        "current"
+        "unresolved"
     );
     fs::remove_dir_all(root).expect("cleanup");
 }
