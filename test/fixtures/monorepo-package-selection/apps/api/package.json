@@ -1,7 +1,0 @@
-{
-  "name": "@monorepo/api",
-  "version": "1.0.0",
-  "dependencies": {
-    "@monorepo/shared": "*"
-  }
-}
