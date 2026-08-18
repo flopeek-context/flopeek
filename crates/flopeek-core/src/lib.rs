@@ -12,6 +12,7 @@ pub mod model;
 pub mod module_resolution;
 pub mod protocol;
 pub mod store;
+pub mod temporal;
 pub mod typescript;
 
 #[cfg(test)]
@@ -19,7 +20,7 @@ mod architecture_contract_tests {
     #[test]
     fn public_core_contract_paths_remain_stable() {
         assert_eq!(crate::model::GRAPH_SCHEMA, "flopeek-graph/v6");
-        assert_eq!(crate::model::PROTOCOL_SCHEMA, "flopeek-protocol/v6");
+        assert_eq!(crate::model::PROTOCOL_SCHEMA, "flopeek-protocol/v7");
         let _: fn(&std::path::Path) -> Result<crate::model::ScanResult, String> =
             crate::protocol::scan_project;
         let _: fn(&std::path::Path, &str) -> Result<crate::model::ContextRef, String> =
@@ -58,12 +59,12 @@ mod architecture_contract_tests {
 
     #[test]
     fn persistence_and_diagnostic_contract_paths_remain_stable() {
-        assert_eq!(crate::store::CURRENT_USER_VERSION, 6);
-        assert_eq!(crate::model::CONTEXT_REF_SCHEMA, "flopeek-context-ref/v2");
+        assert_eq!(crate::store::CURRENT_USER_VERSION, 7);
+        assert_eq!(crate::model::CONTEXT_REF_SCHEMA, "flopeek-context-ref/v3");
         assert_eq!(crate::model::FLOW_REF_SCHEMA, "flopeek-flow-ref/v1");
         assert_eq!(
             crate::model::DIAGNOSTIC_PACKET_SCHEMA,
-            "flopeek-diagnostic-packet/v3"
+            "flopeek-diagnostic-packet/v4"
         );
         assert_eq!(
             crate::model::HISTORICAL_SNAPSHOT_SCHEMA,
@@ -73,5 +74,25 @@ mod architecture_contract_tests {
             crate::protocol::scan_project;
         let _: fn(&std::path::Path, &str) -> Result<crate::model::FlowRef, String> =
             crate::store::resolve_flow;
+    }
+
+    #[test]
+    fn temporal_contract_identity_is_deterministic() {
+        assert_eq!(
+            crate::model::OBSERVATION_CONTINUITY_SCHEMA,
+            "flopeek-observation-continuity/v1"
+        );
+        assert_eq!(
+            crate::model::CONTEXT_RECONCILIATION_SCHEMA,
+            "flopeek-context-reconciliation/v1"
+        );
+        assert_eq!(
+            crate::temporal::observation_event_id("project", None, "observation"),
+            crate::temporal::observation_event_id("project", None, "observation")
+        );
+        assert_eq!(
+            crate::temporal::fingerprint_contract("ast-and-direct-edges"),
+            "node-ast-and-direct-edges/v1"
+        );
     }
 }

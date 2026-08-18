@@ -183,12 +183,57 @@ pub fn persist_scan(
         )
         .map_err(|error| format!("Unable to persist graph observation: {error}"))?;
     snapshot.observation_id = observation;
+    let previous_state = transaction
+        .query_row(
+            "SELECT current_observation_id, current_event_id
+             FROM project_state WHERE project_id = ?1",
+            params![snapshot.project_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Unable to read previous observation event: {error}"))?;
+    let event_id = if previous_state
+        .as_ref()
+        .is_some_and(|(previous_observation, event)| {
+            previous_observation == &snapshot.observation_id && event.is_some()
+        }) {
+        previous_state
+            .as_ref()
+            .and_then(|(_, event)| event.clone())
+            .expect("same observation has an event")
+    } else {
+        let predecessor = previous_state
+            .as_ref()
+            .and_then(|(_, event)| event.as_deref());
+        let event_id = crate::temporal::observation_event_id(
+            &snapshot.project_id,
+            predecessor,
+            &snapshot.observation_id,
+        );
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO observation_events(
+                    event_id, project_id, observation_id, predecessor_event_id, observed_at
+                 ) VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![
+                    event_id,
+                    snapshot.project_id,
+                    snapshot.observation_id,
+                    predecessor,
+                    now_seconds()
+                ],
+            )
+            .map_err(|error| format!("Unable to persist observation continuity event: {error}"))?;
+        event_id
+    };
     transaction
         .execute(
-            "INSERT INTO project_state(project_id, current_observation_id)
-             VALUES(?1, ?2)
-             ON CONFLICT(project_id) DO UPDATE SET current_observation_id = excluded.current_observation_id",
-            params![snapshot.project_id, snapshot.observation_id],
+            "INSERT INTO project_state(project_id, current_observation_id, current_event_id)
+             VALUES(?1, ?2, ?3)
+             ON CONFLICT(project_id) DO UPDATE SET
+                 current_observation_id = excluded.current_observation_id,
+                 current_event_id = excluded.current_event_id",
+            params![snapshot.project_id, snapshot.observation_id, event_id],
         )
         .map_err(|error| format!("Unable to update current project observation: {error}"))?;
     let refs = context::for_snapshot(&transaction, &snapshot)?;

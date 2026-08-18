@@ -6,18 +6,22 @@
 use crate::context;
 use crate::flow_ref;
 use crate::model::{
-    ContextRef, GraphEdge, GraphNode, GraphSnapshot, PRODUCT_IDENTITY, STORE_SCHEMA, ScanResult,
+    CONTEXT_RECONCILIATION_SCHEMA, CONTEXT_REF_SCHEMA, ContextReconciliation, ContextRef,
+    GraphBasis, GraphEdge, GraphNode, GraphSnapshot, OBSERVATION_CONTINUITY_SCHEMA,
+    ObservationContinuity, ObservationContinuityEvent, PRODUCT_IDENTITY, STORE_SCHEMA, ScanResult,
     SourceFile, StoreStatus, TypeScriptFacts,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_DIRECTORY: &str = ".flopeek";
 pub const STORE_FILENAME: &str = "flopeek.sqlite3";
-pub const CURRENT_USER_VERSION: i64 = 6;
+pub const CURRENT_USER_VERSION: i64 = 7;
 
+mod continuity;
 mod memory;
 mod migrations;
 mod query;
@@ -25,6 +29,7 @@ mod scan;
 #[cfg(test)]
 mod tests;
 
+pub use continuity::{get_observation_continuity, reconcile_context};
 use memory::now_seconds;
 pub(crate) use memory::now_seconds_for_sql;
 pub use memory::{

@@ -8,6 +8,21 @@ pub fn for_snapshot(
     snapshot: &GraphSnapshot,
 ) -> Result<Vec<ContextRef>, String> {
     let mut refs = Vec::new();
+    let current_event_id = transaction
+        .query_row(
+            "SELECT current_event_id FROM project_state WHERE project_id = ?1",
+            params![snapshot.project_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Unable to read current observation event: {error}"))?
+        .flatten()
+        .unwrap_or_default();
+    if current_event_id.is_empty() {
+        return Err(
+            "Current observation event is unavailable while persisting Context Refs.".to_string(),
+        );
+    }
     for node in snapshot
         .nodes
         .iter()
@@ -26,6 +41,7 @@ pub fn for_snapshot(
             origin_source_revision: snapshot.source_revision.clone(),
             origin_fingerprint: node.evidence_fingerprint.clone(),
             fingerprint_scope: "ast-and-direct-edges".to_string(),
+            fingerprint_contract: crate::temporal::NODE_FINGERPRINT_CONTRACT.to_string(),
             freshness_reason: "origin-observation-current".to_string(),
             origin_basis: Some(GraphBasis {
                 project_id: snapshot.project_id.clone(),
@@ -34,6 +50,8 @@ pub fn for_snapshot(
                 source_revision: snapshot.source_revision.clone(),
                 observation_id: snapshot.observation_id.clone(),
             }),
+            current_event_id: current_event_id.clone(),
+            successor_uri: None,
             current_basis: Some(GraphBasis {
                 project_id: snapshot.project_id.clone(),
                 graph_id: snapshot.graph_id.clone(),
@@ -46,8 +64,9 @@ pub fn for_snapshot(
             .execute(
                 "INSERT OR IGNORE INTO context_refs(
                     uri, project_id, graph_id, graph_version, node_id, created_at,
-                    origin_observation_id, origin_source_revision, origin_fingerprint, fingerprint_scope
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, strftime('%s','now'), ?6, ?7, ?8, ?9)",
+                    origin_observation_id, origin_source_revision, origin_fingerprint,
+                    fingerprint_scope, fingerprint_contract
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, strftime('%s','now'), ?6, ?7, ?8, ?9, ?10)",
                 params![
                     reference.uri,
                     reference.project_id,
@@ -58,6 +77,7 @@ pub fn for_snapshot(
                     reference.origin_source_revision,
                     reference.origin_fingerprint,
                     reference.fingerprint_scope,
+                    reference.fingerprint_contract,
                 ],
             )
             .map_err(|error| format!("Unable to persist Context Ref: {error}"))?;
@@ -99,16 +119,21 @@ pub fn for_snapshot(
             canonical.fingerprint_scope.as_str(),
             "ast-and-direct-edges" | "legacy-file-v1"
         );
+        let origin_contract_matches =
+            canonical.fingerprint_contract == reference.fingerprint_contract;
         let canonical_status_is_valid = matches!(
             canonical.status.as_str(),
-            "current" | "stale" | "unresolved"
+            "current" | "stale" | "unresolved" | "superseded"
         );
         let canonical_identity_matches = canonical.project_id == reference.project_id
             && canonical.graph_id == reference.graph_id
             && canonical.graph_version == reference.graph_version
             && canonical.node_id == reference.node_id
+            && canonical.fingerprint_contract == reference.fingerprint_contract
+            && canonical.current_event_id == current_event_id
             && canonical_status_is_valid
             && current_basis_matches
+            && origin_contract_matches
             && (canonical.status == "unresolved"
                 || (origin_basis_matches && origin_scope_matches && origin_fingerprint_matches));
         if !canonical_identity_matches {
