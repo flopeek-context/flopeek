@@ -7,6 +7,7 @@ pub mod discovery;
 pub mod graph;
 pub mod history_store;
 pub mod model;
+pub mod module_resolution;
 pub mod protocol;
 pub mod store;
 pub mod typescript;

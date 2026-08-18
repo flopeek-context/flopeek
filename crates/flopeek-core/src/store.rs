@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_DIRECTORY: &str = ".flopeek";
 pub const STORE_FILENAME: &str = "flopeek.sqlite3";
-pub const CURRENT_USER_VERSION: i64 = 4;
+pub const CURRENT_USER_VERSION: i64 = 5;
 
 pub fn database_path(root: &Path) -> PathBuf {
     root.join(STORE_DIRECTORY).join(STORE_FILENAME)
@@ -68,6 +68,7 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), String> {
             2 => migration_v2(&transaction)?,
             3 => migration_v3(&transaction)?,
             4 => migration_v4(&transaction)?,
+            5 => migration_v5(&transaction)?,
             _ => unreachable!("migration target is bounded by CURRENT_USER_VERSION"),
         }
         transaction
@@ -362,7 +363,7 @@ fn migration_v4(transaction: &Transaction<'_>) -> Result<(), String> {
             .strip_suffix("+dirty")
             .unwrap_or(&source_revision)
             .to_string();
-        let observation_id = observation_id(
+        let observation_id = legacy_observation_id(
             &project_id,
             &source_revision,
             &source_fingerprint,
@@ -450,6 +451,33 @@ fn migration_v4(transaction: &Transaction<'_>) -> Result<(), String> {
     migrate_context_payloads(transaction)
 }
 
+fn migration_v5(transaction: &Transaction<'_>) -> Result<(), String> {
+    add_column(
+        transaction,
+        "graph_observations",
+        "module_resolution_status",
+        "TEXT NOT NULL DEFAULT 'legacy-config-basis-unavailable'",
+    )?;
+    add_column(
+        transaction,
+        "graph_observations",
+        "module_resolution_fingerprint",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column(
+        transaction,
+        "graph_observations",
+        "module_resolution_effective_fingerprint",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column(
+        transaction,
+        "graph_observations",
+        "module_resolution_manifest_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+}
+
 fn add_column(
     transaction: &Transaction<'_>,
     table: &str,
@@ -471,6 +499,19 @@ fn add_column(
 }
 
 fn observation_id(
+    project_id: &str,
+    source_revision: &str,
+    source_fingerprint: &str,
+    module_resolution_fingerprint: &str,
+    graph_id: &str,
+) -> String {
+    let input = format!(
+        "flopeek-observation-v2\0{project_id}\0{source_revision}\0{source_fingerprint}\0{module_resolution_fingerprint}\0{graph_id}"
+    );
+    format!("observation_{}", blake3::hash(input.as_bytes()).to_hex())
+}
+
+fn legacy_observation_id(
     project_id: &str,
     source_revision: &str,
     source_fingerprint: &str,
@@ -708,16 +749,23 @@ pub fn persist_scan(
         &snapshot.project_id,
         &snapshot.source_revision,
         &snapshot.source_fingerprint,
+        &snapshot.module_resolution.exact_fingerprint,
         &snapshot.graph_id,
     );
     let source_manifest_json = serde_json::to_string(&snapshot.files)
         .map_err(|error| format!("Unable to encode graph observation manifest: {error}"))?;
+    let module_resolution_manifest_json =
+        serde_json::to_string(&snapshot.module_resolution.config_files)
+            .map_err(|error| format!("Unable to encode module resolution manifest: {error}"))?;
     transaction
         .execute(
             "INSERT OR IGNORE INTO graph_observations(
                 observation_id, project_id, graph_version, git_revision,
-                source_fingerprint, source_manifest_json, dirty, observed_at
-             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                source_fingerprint, source_manifest_json, dirty,
+                module_resolution_status, module_resolution_fingerprint,
+                module_resolution_effective_fingerprint, module_resolution_manifest_json,
+                observed_at
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 observation,
                 snapshot.project_id,
@@ -726,6 +774,10 @@ pub fn persist_scan(
                 snapshot.source_fingerprint,
                 source_manifest_json,
                 i64::from(dirty),
+                snapshot.module_resolution.status,
+                snapshot.module_resolution.exact_fingerprint,
+                snapshot.module_resolution.effective_fingerprint,
+                module_resolution_manifest_json,
                 now_seconds()
             ],
         )
@@ -894,13 +946,29 @@ pub fn resolve_context(root: &Path, uri: &str) -> Result<ContextRef, String> {
 pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
     let connection = open(root)?;
     let project_id = crate::graph::project_id(root);
-    let Some((graph_id, graph_version, source_revision, source_fingerprint, observation_id, truncated, omissions_json)) = connection
+    let Some((
+        graph_id,
+        graph_version,
+        source_revision,
+        source_fingerprint,
+        observation_id,
+        module_resolution_status,
+        module_resolution_fingerprint,
+        module_resolution_effective_fingerprint,
+        module_resolution_manifest_json,
+        truncated,
+        omissions_json,
+    )) = connection
         .query_row(
             "SELECT graph.graph_id, graph.graph_version,
                     CASE WHEN observation.dirty = 1 THEN observation.git_revision || '+dirty'
                          ELSE observation.git_revision END,
-                    observation.source_fingerprint, observation.observation_id,
-                    graph.truncated, graph.omissions_json
+                     observation.source_fingerprint, observation.observation_id,
+                     observation.module_resolution_status,
+                     observation.module_resolution_fingerprint,
+                     observation.module_resolution_effective_fingerprint,
+                     observation.module_resolution_manifest_json,
+                     graph.truncated, graph.omissions_json
              FROM project_state state
              JOIN graph_observations observation ON observation.observation_id = state.current_observation_id
              JOIN graph_versions graph ON graph.graph_version = observation.graph_version
@@ -913,8 +981,12 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, String>(10)?,
                 ))
             },
         )
@@ -997,7 +1069,67 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
     edges.shrink_to_fit();
     let omissions = serde_json::from_str::<Vec<String>>(&omissions_json)
         .map_err(|error| format!("Unable to decode graph omissions: {error}"))?;
-    let resolution_evidence = crate::graph::resolution_evidence(&facts, legacy_facts);
+    let mut resolution_evidence = crate::graph::resolution_evidence(&facts, legacy_facts);
+    if module_resolution_status == "truncated" {
+        resolution_evidence.status = "truncated".to_string();
+        resolution_evidence.truncated = true;
+        resolution_evidence
+            .omissions
+            .push("module-resolution-basis-truncated".to_string());
+    } else if module_resolution_status == "unavailable"
+        || module_resolution_status.starts_with("legacy-")
+    {
+        resolution_evidence.status = "unavailable".to_string();
+        resolution_evidence
+            .omissions
+            .push("module-resolution-basis-unavailable".to_string());
+    }
+    let module_resolution_manifest: Vec<crate::model::ModuleResolutionConfigFile> =
+        serde_json::from_str(&module_resolution_manifest_json)
+            .map_err(|error| format!("Unable to decode module resolution manifest: {error}"))?;
+    let root_config = if module_resolution_manifest.is_empty() {
+        None
+    } else {
+        Some("tsconfig.json".to_string())
+    };
+    let limitations = if module_resolution_status == "legacy-config-basis-unavailable" {
+        vec!["legacy-config-basis-unavailable".to_string()]
+    } else if module_resolution_status == "complete" {
+        vec![
+            "nested-tsconfig-project-selection-unsupported".to_string(),
+            "package-and-project-reference-resolution-unsupported".to_string(),
+        ]
+    } else {
+        omissions
+            .iter()
+            .filter(|omission| {
+                omission.starts_with("tsconfig-") || omission.starts_with("module-resolution-")
+            })
+            .cloned()
+            .collect()
+    };
+    let module_resolution_omissions =
+        if module_resolution_status == "legacy-config-basis-unavailable" {
+            vec!["legacy-config-basis-unavailable".to_string()]
+        } else {
+            omissions
+                .iter()
+                .filter(|omission| {
+                    omission.starts_with("tsconfig-") || omission.starts_with("module-resolution-")
+                })
+                .cloned()
+                .collect()
+        };
+    let module_resolution = crate::model::ModuleResolutionBasis {
+        schema_version: crate::module_resolution::MODULE_RESOLUTION_SCHEMA.to_string(),
+        status: module_resolution_status,
+        root_config,
+        config_files: module_resolution_manifest,
+        exact_fingerprint: module_resolution_fingerprint,
+        effective_fingerprint: module_resolution_effective_fingerprint,
+        limitations,
+        omissions: module_resolution_omissions,
+    };
     Ok(Some(GraphSnapshot {
         schema_version: crate::model::GRAPH_SCHEMA.to_string(),
         product: PRODUCT_IDENTITY.to_string(),
@@ -1011,6 +1143,7 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         nodes,
         edges,
         resolution_evidence,
+        module_resolution,
         truncated: truncated != 0,
         omissions,
     }))
@@ -1602,6 +1735,52 @@ mod tests {
     }
 
     #[test]
+    fn comment_only_tsconfig_change_creates_observation_but_keeps_context_current() {
+        let root = fixture_root();
+        fs::write(
+            root.join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@app/*":["src/*"]}}}"#,
+        )
+        .expect("config");
+        let (snapshot, facts) = graph::build(&root).expect("build first");
+        let first = persist_scan(&root, snapshot, &facts).expect("persist first");
+        let reference = first.context_refs[0].uri.clone();
+        fs::write(
+            root.join("tsconfig.json"),
+            "// documentation-only config comment\n{\n  \"compilerOptions\": { \"baseUrl\": \".\", \"paths\": { \"@app/*\": [\"src/*\"] } }\n}\n",
+        )
+        .expect("comment-only config");
+        let (snapshot, facts) = graph::build(&root).expect("build second");
+        let second = persist_scan(&root, snapshot, &facts).expect("persist second");
+        assert_eq!(first.graph.graph_id, second.graph.graph_id);
+        assert_eq!(first.graph.graph_version, second.graph.graph_version);
+        assert_ne!(first.graph.observation_id, second.graph.observation_id);
+        assert_eq!(second.graph.module_resolution.status, "complete");
+        assert_eq!(
+            resolve_context(&root, &reference)
+                .expect("resolve current reference")
+                .status,
+            "current"
+        );
+        let connection = open(&root).expect("open");
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .expect("version"),
+            CURRENT_USER_VERSION
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM graph_observations", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("observations"),
+            2
+        );
+        drop(connection);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn failed_v3_to_v4_migration_preserves_user_version_and_existing_rows() {
         let root = fixture_root();
         let connection = open(&root).expect("fresh database");
@@ -1853,6 +2032,24 @@ mod tests {
                 .any(|column| column == "omissions_json")
         );
         assert!(history_columns.iter().any(|column| column == "context_id"));
+        let observation_columns = connection
+            .prepare("PRAGMA table_info(graph_observations)")
+            .expect("observation columns")
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("observation query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("observation names");
+        assert!(
+            observation_columns
+                .iter()
+                .any(|column| column == "module_resolution_fingerprint")
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .expect("version"),
+            CURRENT_USER_VERSION
+        );
         drop(connection);
         fs::remove_dir_all(root).expect("cleanup");
     }
