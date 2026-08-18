@@ -60,7 +60,7 @@ Status: `current`
 
 #### Generated product contract
 
-- Source candidate: `flopeek@0.2.1-beta.4` on npm channel `beta`.
+- Legacy package publication: `blocked`; imported identity `flopeek@0.2.1-beta.4` has no active npm channel.
 - Last verified preview artifact: `flopeek@0.2.1-beta.3` (`passed`).
 - Runtime: Node.js 22 or later (`>=22`).
 - Public default core: `js` / javascript.
@@ -76,20 +76,16 @@ This block is generated from repository contracts; edit the source contracts and
 - Source is currently distributed directly; there is no build step.
 - `package.json#files` and `packaging/package-policy.json` bound the candidate tarball to runtime modules, Viewer assets, the Flopeek integration skill, showcase, and public benchmark data. Repository governance, tests, CI, caches, credentials, logs, and source maps are rejected by the package audit.
 - `scripts/verify-clean-room.js` packs and installs the exact source tarball into an operating-system temporary consumer with lifecycle scripts disabled, then checks the installed binary, bounded static scan, MCP bootstrap, fixture immutability, and cleanup.
-- The source repository is public. npm registry publishing remains intentionally separate from a source tag or GitHub Release; packaging evidence does not decide registry permission or release stage.
-- `main` is the only long-lived public source branch. CI validates short-lived
+- This is an independent repository created from an immutable source snapshot; the imported repository is historical provenance rather than a live parent.
+- `main` is the protected baseline branch. CI validates short-lived
   `<type>/<change-name>` SDLC branch names and rejects tool, vendor, account, or
   agent identity prefixes before running the remaining source and package gates.
-- Public Core releases are created from immutable tags on `main` only after the
-  source-owned GitHub release approval validates the SHA-256 digest of an exact
-  release manifest. That manifest binds the main tarball, rollout-evidence
-  bytes, every native platform tarball, and every native binary digest to the
-  tag/package/source identity. Outside alpha, the published npm dist-tag is
-  validated as well. The approval record is an owner attestation with evidence
-  references, not an
-  automated proof of human/provider independence. A separate private overlay
-  consumes those tagged Core versions and must not copy Core source or become a
-  second Core source of truth.
+- Imported release automation is disabled until identity isolation is complete.
+  The package is private, has no publication configuration, and the remaining
+  legacy approval and rollout records are compatibility material rather than
+  release authority. A later identity-isolation change must establish new
+  package, CLI, repository, cache, protocol, server, native-package, and release
+  identities before any external dogfood or release.
 
 ### Main modules
 

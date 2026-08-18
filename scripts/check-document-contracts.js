@@ -18,10 +18,10 @@ const releasing = read("RELEASING.md");
 
 if (packageJson.license !== "Apache-2.0") failures.push("package.json must declare Apache-2.0.");
 if (!fs.existsSync(path.join(root, "LICENSE"))) failures.push("LICENSE must exist.");
-requireMatch(releasing, /`main` is the only long-lived public source branch/, "public main release contract");
-requireMatch(releasing, /Private overlay boundary/, "private overlay release boundary");
-requireMatch(support, /The public `main` branch is the canonical Flopeek Core source/, "canonical public Core support statement");
-requireMatch(architecture, /Public Core releases are created from immutable tags on `main`/, "tagged public Core architecture statement");
+requireMatch(releasing, /Public release is intentionally disabled while identity isolation is pending/, "pending identity-isolation release block");
+requireMatch(releasing, /must not reuse the imported records/, "legacy approval quarantine");
+requireMatch(support, /Public package and GitHub release promotion are blocked until identity isolation is complete/, "support release block");
+requireMatch(architecture, /Imported release automation is disabled until identity isolation is complete/, "architecture release block");
 rejectMatch(`${support}\n${roadmap}\n${architecture}`, /private development source of truth|private-development to public-source projection|public repository creation, visibility change/i, "retired private-to-public source model");
 rejectMatch(`${support}\n${roadmap}\n${architecture}`, /export:public-repository|audit:public-repository|public-snapshot\.yml/, "retired public snapshot tooling");
 requireMatch(support, /fixture gate reports 40\/40 expected relationships/, "current fixture corpus total");

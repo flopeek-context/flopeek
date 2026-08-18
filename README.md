@@ -1,5 +1,11 @@
 # Flopeek
 
+> **Independent-repository import notice:** this tree is currently a frozen
+> source baseline. Legacy install, package, release, and branding instructions
+> below are retained for provenance only and are not active for this repository.
+> npm publication and GitHub release promotion are blocked until the explicit
+> identity-isolation change is complete.
+
 > Versioned change context for developers and coding agents.
 
 **Flopeek is local-first code intelligence for developers and coding agents.**
@@ -118,7 +124,7 @@ universal accuracy claims.
 
 ## Generated product contract
 
-- Source candidate: `flopeek@0.2.1-beta.4` on npm channel `beta`.
+- Legacy package publication: `blocked`; imported identity `flopeek@0.2.1-beta.4` has no active npm channel.
 - Last verified preview artifact: `flopeek@0.2.1-beta.3` (`passed`).
 - Runtime: Node.js 22 or later (`>=22`).
 - Public default core: `js` / javascript.

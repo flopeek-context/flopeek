@@ -20,13 +20,13 @@ test("package policy accepts only the bounded runtime artifact", () => {
   assert.equal(report.checks.allowlist, true);
   assert.equal(report.checks.releaseBoundary, true);
   assert.equal(report.policy.releasePublishingApproved, false);
-  assert.equal(report.policy.publicationState, "prepared");
-  assert.equal(report.policy.distTag, "beta");
+  assert.equal(report.policy.publicationState, "blocked-pending-identity-isolation");
+  assert.equal(report.policy.distTag, null);
 });
 
 test("package policy rejects repository governance, cache, secrets, maps, omissions, and release drift", () => {
   const unsafe = result([...POLICY.requiredPaths.filter((item) => item !== "src/mcp.js"), ".github/workflows/ci.yml", ".flopeek/graph.json", "benchmarks/private-provider-cohort.json", "src/.env.production", "src/secrets.local.json", "src/private.pem", "public/app.js.map"]);
-  const publishable = { ...PACKAGE, private: true };
+  const publishable = { ...PACKAGE, private: false, publishConfig: { access: "public", tag: "beta" } };
   const report = auditPackageFiles(unsafe, POLICY, publishable);
   assert.equal(report.status, "failed");
   assert.ok(report.errors.some((item) => item.code === "outside-allowlist"));
@@ -44,8 +44,18 @@ test("npm publication requires an explicit matching owner approval", () => {
   assert.equal(approval.status, "not-approved");
   assert.equal(approval.packageName, PACKAGE.name);
   assert.equal(approval.version, PACKAGE.version);
-  assert.equal(approval.distTag, PACKAGE.publishConfig.tag);
+  assert.equal(approval.distTag, "beta");
   assert.throws(() => assertNpmPublicationApproved(ROOT), /npm publication is not approved/);
+});
+
+test("legacy npm publication is hard-blocked while identity isolation is pending", () => {
+  const command = spawnSync(process.execPath, [path.join(ROOT, "scripts", "block-legacy-publication.js")], {
+    cwd: ROOT,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(command.status, 1);
+  assert.match(command.stderr, /blocked until the independent product identity is selected and isolated/);
 });
 
 test("current npm dry-run package passes the committed allowlist", () => {

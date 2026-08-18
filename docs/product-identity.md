@@ -1,5 +1,10 @@
 # Product identity
 
+> **Legacy baseline document:** the identity below belongs to the imported
+> source snapshot. It is quarantined compatibility material, not the identity
+> or release authority of this independent repository. The replacement product
+> identity has not yet been selected.
+
 ## Canonical public identity
 
 **Flopeek** is the product, repository, npm-package candidate, and CLI name for

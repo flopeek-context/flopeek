@@ -43,8 +43,8 @@ function validatePolicy(input) {
   exactKeys(input.package, ["name", "publication", "bin", "minimumNodeMajor"], "policy.package");
   if (input.package.name !== "flopeek") throw new PackagePolicyError("invalid-package-name", "policy.package.name must be flopeek.");
   exactKeys(input.package.publication, ["state", "distTag", "approvalFile"], "policy.package.publication");
-  if (input.package.publication.state !== "prepared") throw new PackagePolicyError("unsafe-release-policy", "The package publication state must remain prepared until a separate release approval.");
-  if (input.package.publication.distTag !== "beta") throw new PackagePolicyError("unsafe-release-policy", "The prepared package must use the beta dist-tag.");
+  if (input.package.publication.state !== "blocked-pending-identity-isolation") throw new PackagePolicyError("unsafe-release-policy", "Package publication must remain blocked until identity isolation is complete.");
+  if (input.package.publication.distTag !== null) throw new PackagePolicyError("unsafe-release-policy", "A blocked package must not declare a publication dist-tag.");
   if (!Number.isSafeInteger(input.package.minimumNodeMajor) || input.package.minimumNodeMajor < 20) throw new PackagePolicyError("invalid-node-version", "policy.package.minimumNodeMajor must be an integer of at least 20.");
   if (!Number.isSafeInteger(input.maximumEntries) || input.maximumEntries < 1) throw new PackagePolicyError("invalid-entry-limit", "policy.maximumEntries must be a positive integer.");
   if (!Number.isSafeInteger(input.maximumUnpackedBytes) || input.maximumUnpackedBytes < 1) throw new PackagePolicyError("invalid-size-limit", "policy.maximumUnpackedBytes must be a positive integer.");
@@ -111,11 +111,9 @@ function auditPackageFiles(packResult, policyInput, packageJson) {
   if (!Number.isSafeInteger(packResult.unpackedSize) || packResult.unpackedSize > policy.maximumUnpackedBytes) errors.push({ code: "unpacked-size-limit-exceeded", actual: packResult.unpackedSize ?? null, maximum: policy.maximumUnpackedBytes });
   if (packResult.name !== policy.package.name || packageJson.name !== policy.package.name) errors.push({ code: "package-name-mismatch", expected: policy.package.name });
   if (packResult.version !== packageJson.version) errors.push({ code: "package-version-mismatch", expected: packageJson.version, actual: packResult.version ?? null });
-  if (packageJson.private !== false) errors.push({ code: "release-publication-metadata", expectedPrivate: false, actualPrivate: packageJson.private ?? null });
-  if (packageJson.publishConfig?.access !== "public" || packageJson.publishConfig?.tag !== policy.package.publication.distTag) {
-    errors.push({ code: "release-publication-metadata", expectedAccess: "public", expectedDistTag: policy.package.publication.distTag });
-  }
-  if (packageJson.scripts?.prepublishOnly !== "npm run verify:npm-publication") errors.push({ code: "release-approval-boundary", expectedScript: "npm run verify:npm-publication" });
+  if (packageJson.private !== true) errors.push({ code: "release-publication-metadata", expectedPrivate: true, actualPrivate: packageJson.private ?? null });
+  if (packageJson.publishConfig !== undefined) errors.push({ code: "release-publication-metadata", expectedPublishConfig: "absent" });
+  if (packageJson.scripts?.prepublishOnly !== "node scripts/block-legacy-publication.js") errors.push({ code: "release-approval-boundary", expectedScript: "node scripts/block-legacy-publication.js" });
   if (packageJson.bin?.flopeek !== policy.package.bin) errors.push({ code: "binary-path-mismatch", expected: policy.package.bin, actual: packageJson.bin?.flopeek ?? null });
   const declaredNode = Number(String(packageJson.engines?.node || "").match(/\d+/u)?.[0]);
   if (!Number.isSafeInteger(declaredNode) || declaredNode < policy.package.minimumNodeMajor) errors.push({ code: "node-engine-mismatch", minimum: policy.package.minimumNodeMajor, actual: packageJson.engines?.node ?? null });
@@ -146,7 +144,7 @@ function auditPackageFiles(packResult, policyInput, packageJson) {
       requiredRuntime: missing.length === 0,
       boundedSize: files.length <= policy.maximumEntries && Number.isSafeInteger(packResult.unpackedSize) && packResult.unpackedSize <= policy.maximumUnpackedBytes,
       packageIdentity: packResult.name === policy.package.name && packageJson.name === policy.package.name && packResult.version === packageJson.version,
-      releaseBoundary: packageJson.private === false && packageJson.publishConfig?.access === "public" && packageJson.publishConfig?.tag === policy.package.publication.distTag && packageJson.scripts?.prepublishOnly === "npm run verify:npm-publication",
+      releaseBoundary: packageJson.private === true && packageJson.publishConfig === undefined && packageJson.scripts?.prepublishOnly === "node scripts/block-legacy-publication.js",
     },
     errors,
     limitations: [

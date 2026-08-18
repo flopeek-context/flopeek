@@ -56,7 +56,13 @@ function buildProductContractFromInputs(inputs) {
   if (npmApproval.packageName !== packageJson.name || npmApproval.version !== packageJson.version) {
     throw new Error("npm publication approval identity differs from the source package identity.");
   }
-  if (npmApproval.distTag !== packagePolicy.package?.publication?.distTag) {
+  const publication = packagePolicy.package?.publication;
+  const publicationBlocked = publication?.state === "blocked-pending-identity-isolation";
+  if (publicationBlocked) {
+    if (packageJson.private !== true || packageJson.publishConfig !== undefined || publication.distTag !== null || npmApproval.status !== "not-approved") {
+      throw new Error("Pending identity isolation requires private package metadata, no dist-tag, and no npm approval.");
+    }
+  } else if (npmApproval.distTag !== publication?.distTag) {
     throw new Error("npm publication approval dist-tag differs from package policy.");
   }
   if (rolloutEvidence.binding?.packageVersion !== packageJson.version) {
@@ -76,7 +82,8 @@ function buildProductContractFromInputs(inputs) {
       sourceVersion: packageJson.version,
       enginesNode: packageJson.engines.node,
       minimumNodeMajor: nodeMinimum,
-      distTag: npmApproval.distTag,
+      publicationState: publication.state,
+      distTag: publication.distTag,
       lastVerifiedPreview: {
         version: preview.version,
         status: cleanRoomEvidence.status,
@@ -93,7 +100,7 @@ function buildProductContractFromInputs(inputs) {
       nativeDefaultEligible: nativeRolloutComplete,
     },
     release: {
-      npm: { status: npmApproval.status, version: npmApproval.version, distTag: npmApproval.distTag },
+      npm: { status: npmApproval.status, version: npmApproval.version, distTag: publication.distTag },
       github: { status: githubApproval.status },
     },
     adapters: {
@@ -132,7 +139,9 @@ function renderProductContractBlock(contract, document) {
     "",
     `${heading} Generated product contract`,
     "",
-    `- Source candidate: \`${contract.package.name}@${contract.package.sourceVersion}\` on npm channel \`${contract.package.distTag}\`.`,
+    contract.package.publicationState === "blocked-pending-identity-isolation"
+      ? `- Legacy package publication: \`blocked\`; imported identity \`${contract.package.name}@${contract.package.sourceVersion}\` has no active npm channel.`
+      : `- Source candidate: \`${contract.package.name}@${contract.package.sourceVersion}\` on npm channel \`${contract.package.distTag}\`.`,
     `- Last verified preview artifact: \`${contract.package.name}@${contract.package.lastVerifiedPreview.version}\` (\`${contract.package.lastVerifiedPreview.status}\`).`,
     `- Runtime: Node.js ${contract.package.minimumNodeMajor} or later (\`${contract.package.enginesNode}\`).`,
     `- Public default core: \`${contract.core.publicDefaultMode}\` / ${contract.core.publicDefaultImplementation}.`,

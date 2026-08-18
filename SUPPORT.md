@@ -382,14 +382,13 @@ MCP currently exposes no source write, file content, shell, deployment, credenti
 - Install with the explicit `flopeek@beta` channel until a stable release exists. The first registry publication also exposes the same prerelease through npm's default `latest` resolution; this does not promote the product to Flopeek's stable release stage.
 - Clean-room scan and MCP startup may write Flopeek cache metadata only inside the disposable fixture copy. They do not execute the target application or its tests and must leave non-cache fixture content unchanged.
 
-## Public Core and private overlay support
+## Imported Core compatibility support
 
-- The public `main` branch is the canonical Flopeek Core source. It is the branch users clone, review, test, and extend.
+- This independent repository uses `main` as its protected baseline. The imported Core repository is historical provenance, not a live parent or release authority.
 - Short-lived contribution branches must use an approved SDLC type such as `feature/`, `fix/`, `docs/`, `release/`, `hotfix/`, `chore/`, `test/`, or `ci/`. CI rejects tool, vendor, account, and agent identity prefixes, including `codex/` and `agent/`, and merged branches are deleted.
-- Alpha, beta, release-candidate, and stable Core releases are immutable tags on commits already present on public `main`. The tagged-release workflow fails closed until a source-owned owner approval records the exact tag/package, review evidence, and—outside alpha—the matching public npm dist-tag; it then verifies source and package before creating a GitHub Release. The record does not itself prove that an asserted provider identity is independent.
-- The source-owned approval matches `flopeek@0.2.1-beta.3`, and that exact package is published on npm under the `beta` channel. Registry publication does not by itself create a GitHub Release or change the public Core repository's role as canonical source.
-- Commercial and confidential work belongs in a separate private overlay repository that pins an immutable public Core tag. The overlay must not copy `src/`, `public/`, or the Core test suite, and Core defects found privately must be safely reproduced and fixed through public Core first.
-- The former private-development-to-public snapshot exporter has been retired. Public Core release readiness is evaluated from the public repository, its tagged commit, package policy, CI, and the explicit owner release decision.
+- Public package and GitHub release promotion are blocked until identity isolation is complete.
+- Imported npm and GitHub approval records, native rollout evidence, package names, and tags are legacy compatibility records only and cannot authorize a release from this repository.
+- Later upstream changes may be adopted only by explicit, commit-pinned change records with bounded compatibility tests; bulk synchronization is prohibited.
 
 ## Viewer support
 

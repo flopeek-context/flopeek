@@ -5,7 +5,8 @@
     "sourceVersion": "0.2.1-beta.4",
     "enginesNode": ">=22",
     "minimumNodeMajor": 22,
-    "distTag": "beta",
+    "publicationState": "blocked-pending-identity-isolation",
+    "distTag": null,
     "lastVerifiedPreview": {
       "version": "0.2.1-beta.3",
       "status": "passed",
@@ -30,7 +31,7 @@
     "npm": {
       "status": "not-approved",
       "version": "0.2.1-beta.4",
-      "distTag": "beta"
+      "distTag": null
     },
     "github": {
       "status": "not-approved"

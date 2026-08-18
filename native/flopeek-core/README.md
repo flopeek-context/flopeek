@@ -42,7 +42,7 @@ reduces repeated long ID storage without changing the Flopeek graph contract.
 
 ## Generated product contract
 
-- Source candidate: `flopeek@0.2.1-beta.4` on npm channel `beta`.
+- Legacy package publication: `blocked`; imported identity `flopeek@0.2.1-beta.4` has no active npm channel.
 - Last verified preview artifact: `flopeek@0.2.1-beta.3` (`passed`).
 - Runtime: Node.js 22 or later (`>=22`).
 - Public default core: `js` / javascript.

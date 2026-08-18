@@ -22,6 +22,8 @@ test("product contract is derived from package, rollout, approval, mode, and ada
   const contract = buildProductContractFromInputs(inputs());
   assert.equal(contract.package.sourceVersion, require("../../package.json").version);
   assert.equal(contract.package.minimumNodeMajor, 22);
+  assert.equal(contract.package.publicationState, "blocked-pending-identity-isolation");
+  assert.equal(contract.package.distTag, null);
   assert.equal(contract.core.publicDefaultImplementation, "javascript");
   assert.equal(contract.core.experimentalImplementation, "native");
   assert.equal(contract.core.nativeRolloutStatus, "incomplete");
@@ -36,6 +38,9 @@ test("product contract rejects source-version and Node-minimum contradictions", 
   const nodeMismatch = inputs();
   nodeMismatch.packagePolicy.package.minimumNodeMajor = 20;
   assert.throws(() => buildProductContractFromInputs(nodeMismatch), /Node minimum differs/);
+  const unsafePublication = inputs();
+  unsafePublication.packageJson.private = false;
+  assert.throws(() => buildProductContractFromInputs(unsafePublication), /Pending identity isolation requires/);
 });
 
 test("a complete evidence packet with a negative native gate remains non-eligible", () => {
