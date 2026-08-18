@@ -1,53 +1,35 @@
-name: Verify TypeScript authority
+name: Rust foundation
 
 on:
   push:
     branches: [main]
   pull_request:
-  workflow_call:
-    inputs:
-      source_sha:
-        description: Exact source commit to verify.
-        required: true
-        type: string
+  workflow_dispatch:
 
 concurrency:
-  group: verify-ts-authority-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
+  group: rust-foundation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  rust-typescript-authority:
-    name: Rust / TypeScript authority
+  rust:
+    name: Rust format, lint, and tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ inputs.source_sha || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 22
-          cache: npm
-      - id: rust-toolchain
-        shell: pwsh
-        run: |
-          $channel = (Select-String -Path rust-toolchain.toml -Pattern '^\s*channel\s*=\s*"([^"]+)"\s*$').Matches.Groups[1].Value
-          if (-not $channel) { throw 'rust-toolchain.toml has no exact channel.' }
-          "channel=$channel" >> $env:GITHUB_OUTPUT
+
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-02
         with:
-          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+          toolchain: 1.97.0
           components: rustfmt, clippy
-      - run: npm ci
-      - run: cargo fmt --check --manifest-path native/flopeek-core/Cargo.toml
-      - run: cargo clippy --locked --manifest-path native/flopeek-core/Cargo.toml -- -D warnings
-      - run: cargo test --locked --manifest-path native/flopeek-core/Cargo.toml 'js_facts::tests::'
-      - run: npm run test:rust-ts-authority
-      - run: npm run test:contracts
-      - run: npm run check:docs
-      - run: npm run check:document-contracts
-      - run: npm run audit:package
-      - run: npm run verify:import-safety
-      - run: node scripts/verify-branch-name.js
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Check lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --workspace --all-targets --locked

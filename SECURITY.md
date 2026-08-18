@@ -12,7 +12,7 @@ content. Contact the repository owner through their GitHub profile and request
 a private reporting channel.
 
 Include a minimal reproduction, affected Flopeek version or commit, operating
-system, Node version, impact, and suggested mitigation. Do not attach real
+system, Rust toolchain, impact, and suggested mitigation. Do not attach real
 secrets or private repository contents.
 
 ## Scope

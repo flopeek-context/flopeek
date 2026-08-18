@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/flopeek-core"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+license-file = "LICENSE"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "warn"
