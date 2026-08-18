@@ -14,7 +14,25 @@ pub const HISTORY_DIRECTORY: &str = "history";
 const MAX_SNAPSHOT_BYTES: u64 = 8 * 1024 * 1024;
 
 pub fn load(root: &Path, revision: &str) -> Result<Option<HistoricalSnapshot>, String> {
-    let path = snapshot_path(root, revision)?;
+    load_with_key(root, revision, "legacy", "legacy", usize::MAX, usize::MAX)
+}
+
+pub fn load_with_key(
+    root: &Path,
+    revision: &str,
+    derivation_id: &str,
+    parser_id: &str,
+    max_paths: usize,
+    max_snapshot_bytes: usize,
+) -> Result<Option<HistoricalSnapshot>, String> {
+    let path = snapshot_path(
+        root,
+        revision,
+        derivation_id,
+        parser_id,
+        max_paths,
+        max_snapshot_bytes,
+    )?;
     if !path.is_file() {
         return Ok(None);
     }
@@ -40,16 +58,37 @@ pub fn load(root: &Path, revision: &str) -> Result<Option<HistoricalSnapshot>, S
                 .to_string(),
         );
     }
+    if snapshot.files.len() > max_paths || snapshot_json_size(&snapshot)? > max_snapshot_bytes {
+        return Ok(None);
+    }
     Ok(Some(snapshot))
 }
 
 pub fn save(root: &Path, snapshot: &HistoricalSnapshot) -> Result<(), String> {
+    save_with_key(root, snapshot, "legacy", "legacy", usize::MAX, usize::MAX)
+}
+
+pub fn save_with_key(
+    root: &Path,
+    snapshot: &HistoricalSnapshot,
+    derivation_id: &str,
+    parser_id: &str,
+    max_paths: usize,
+    max_snapshot_bytes: usize,
+) -> Result<(), String> {
     if snapshot.schema_version != HISTORICAL_SNAPSHOT_SCHEMA
         || snapshot.project_id != crate::graph::project_id(root)
     {
         return Err("Historical snapshot cannot be stored for this repository.".to_string());
     }
-    let path = snapshot_path(root, &snapshot.source_revision)?;
+    let path = snapshot_path(
+        root,
+        &snapshot.source_revision,
+        derivation_id,
+        parser_id,
+        max_paths,
+        max_snapshot_bytes,
+    )?;
     let directory = path
         .parent()
         .ok_or_else(|| "Historical snapshot path has no parent.".to_string())?;
@@ -57,24 +96,41 @@ pub fn save(root: &Path, snapshot: &HistoricalSnapshot) -> Result<(), String> {
         .map_err(|error| format!("Unable to create historical snapshot directory: {error}"))?;
     let payload = serde_json::to_vec_pretty(snapshot)
         .map_err(|error| format!("Unable to encode historical snapshot: {error}"))?;
-    if payload.len() as u64 > MAX_SNAPSHOT_BYTES {
+    if payload.len() > max_snapshot_bytes || payload.len() as u64 > MAX_SNAPSHOT_BYTES {
         return Err("Historical snapshot exceeds the metadata bound.".to_string());
     }
     atomic_write(&path, &payload)
 }
 
-fn snapshot_path(root: &Path, revision: &str) -> Result<PathBuf, String> {
+fn snapshot_path(
+    root: &Path,
+    revision: &str,
+    derivation_id: &str,
+    parser_id: &str,
+    max_paths: usize,
+    max_snapshot_bytes: usize,
+) -> Result<PathBuf, String> {
     if revision.is_empty()
         || revision.len() > 128
         || revision.bytes().any(|byte| !byte.is_ascii_hexdigit())
     {
         return Err("Historical snapshot revision must be a hexadecimal Git revision.".to_string());
     }
+    let key = format!(
+        "flopeek-history-cache-v2\\0{revision}\\0{derivation_id}\\0{parser_id}\\0{max_paths}\\0{max_snapshot_bytes}"
+    );
+    let cache_id = blake3::hash(key.as_bytes()).to_hex().to_string();
     Ok(root
         .join(crate::store::STORE_DIRECTORY)
         .join("diagnostics")
         .join(HISTORY_DIRECTORY)
-        .join(format!("{revision}.json")))
+        .join(format!("{revision}-{cache_id}.json")))
+}
+
+fn snapshot_json_size(snapshot: &HistoricalSnapshot) -> Result<usize, String> {
+    serde_json::to_vec(snapshot)
+        .map(|payload| payload.len())
+        .map_err(|error| format!("Unable to measure historical snapshot: {error}"))
 }
 
 fn atomic_write(path: &Path, payload: &[u8]) -> Result<(), String> {

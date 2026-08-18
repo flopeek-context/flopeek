@@ -1,9 +1,3 @@
-node_modules/
-.flopeek/*
-!.flopeek/
-!.flopeek/config.json
-.project-flow/
-coverage/
-*.flopeek-reviewed.json
-/test/fixtures/**/.flopeek/
-native/**/target/
+/target/
+/.flopeek/
+/fixtures/**/.flopeek/

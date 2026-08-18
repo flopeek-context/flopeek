@@ -8,6 +8,9 @@
   "llmRequired": false,
   "javascriptRepositoryAuthority": false,
   "automaticRootCauseClaims": false,
+  "graphIdentityBasis": "typescript-structural-evidence",
+  "sourceBasis": "immutable-graph-observation",
+  "contextFreshness": "node-ast-and-direct-edges",
   "normalCi": [
     "cargo fmt --all --check",
     "cargo clippy --workspace --all-targets -- -D warnings",

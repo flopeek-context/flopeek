@@ -97,6 +97,9 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             "persistedAuthority": "sqlite",
             "diagnosticMetadataAuthority": "sqlite",
             "llmRequired": false,
+            "graphIdentityBasis": "typescript-structural-evidence",
+            "sourceBasis": "immutable-graph-observation",
+            "contextFreshness": "node-ast-and-direct-edges",
         })),
         "scan" => {
             let root = project_root(params)?;

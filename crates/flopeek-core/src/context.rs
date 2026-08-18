@@ -1,7 +1,7 @@
 //! Context Ref identity and freshness resolution.
 
-use crate::model::{CONTEXT_REF_SCHEMA, ContextRef, GraphSnapshot};
-use rusqlite::{Connection, OptionalExtension, params};
+use crate::model::{CONTEXT_REF_SCHEMA, ContextRef, GraphBasis, GraphSnapshot};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 pub const MAX_CONTEXT_REFS: usize = 256;
 
@@ -10,7 +10,7 @@ pub fn uri(project_id: &str, graph_id: &str, node_id: &str) -> String {
 }
 
 pub fn for_snapshot(
-    connection: &Connection,
+    transaction: &Transaction<'_>,
     snapshot: &GraphSnapshot,
 ) -> Result<Vec<ContextRef>, String> {
     let mut refs = Vec::new();
@@ -28,17 +28,42 @@ pub fn for_snapshot(
             graph_version: snapshot.graph_version,
             node_id: node.id.clone(),
             status: "current".to_string(),
+            origin_observation_id: snapshot.observation_id.clone(),
+            origin_source_revision: snapshot.source_revision.clone(),
+            origin_fingerprint: node.evidence_fingerprint.clone(),
+            fingerprint_scope: "ast-and-direct-edges".to_string(),
+            freshness_reason: "origin-observation-current".to_string(),
+            origin_basis: Some(GraphBasis {
+                project_id: snapshot.project_id.clone(),
+                graph_id: snapshot.graph_id.clone(),
+                graph_version: snapshot.graph_version,
+                source_revision: snapshot.source_revision.clone(),
+                observation_id: snapshot.observation_id.clone(),
+            }),
+            current_basis: Some(GraphBasis {
+                project_id: snapshot.project_id.clone(),
+                graph_id: snapshot.graph_id.clone(),
+                graph_version: snapshot.graph_version,
+                source_revision: snapshot.source_revision.clone(),
+                observation_id: snapshot.observation_id.clone(),
+            }),
         };
-        connection
+        transaction
             .execute(
-                "INSERT OR IGNORE INTO context_refs(uri, project_id, graph_id, graph_version, node_id, created_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, strftime('%s','now'))",
+                "INSERT OR IGNORE INTO context_refs(
+                    uri, project_id, graph_id, graph_version, node_id, created_at,
+                    origin_observation_id, origin_source_revision, origin_fingerprint, fingerprint_scope
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, strftime('%s','now'), ?6, ?7, ?8, ?9)",
                 params![
                     reference.uri,
                     reference.project_id,
                     reference.graph_id,
                     reference.graph_version as i64,
                     reference.node_id,
+                    reference.origin_observation_id,
+                    reference.origin_source_revision,
+                    reference.origin_fingerprint,
+                    reference.fingerprint_scope,
                 ],
             )
             .map_err(|error| format!("Unable to persist Context Ref: {error}"))?;
@@ -53,9 +78,21 @@ pub fn resolve(
     requested_uri: &str,
     project_id: &str,
 ) -> Result<ContextRef, String> {
-    let Some((stored_project, graph_id, graph_version, node_id)) = connection
+    let Some((
+        stored_project,
+        graph_id,
+        graph_version,
+        node_id,
+        origin_observation_id,
+        origin_source_revision,
+        origin_fingerprint,
+        fingerprint_scope,
+    )) = connection
         .query_row(
-            "SELECT project_id, graph_id, graph_version, node_id FROM context_refs WHERE uri = ?1",
+            "SELECT project_id, graph_id, graph_version, node_id,
+                    origin_observation_id, origin_source_revision,
+                    origin_fingerprint, fingerprint_scope
+             FROM context_refs WHERE uri = ?1",
             params![requested_uri],
             |row| {
                 Ok((
@@ -63,6 +100,10 @@ pub fn resolve(
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
                 ))
             },
         )
@@ -80,26 +121,105 @@ pub fn resolve(
             graph_version: graph_version as u64,
             node_id,
             status: "wrong-project".to_string(),
+            origin_observation_id,
+            origin_source_revision,
+            origin_fingerprint,
+            fingerprint_scope: "unavailable".to_string(),
+            freshness_reason: "project-id-does-not-match-request".to_string(),
+            origin_basis: None,
+            current_basis: None,
         });
     }
-    let current = connection
+
+    let origin_basis = connection
         .query_row(
-            "SELECT graph_id, graph_version FROM graph_versions WHERE project_id = ?1 ORDER BY graph_version DESC LIMIT 1",
-            params![project_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            "SELECT git_revision FROM graph_observations
+             WHERE observation_id = ?1 AND project_id = ?2",
+            params![origin_observation_id, stored_project],
+            |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(|error| format!("Unable to read current graph for Context Ref: {error}"))?;
-    let status = match current {
-        Some((current_graph, current_version)) if current_graph == graph_id => {
-            if current_version as u64 == graph_version as u64 {
-                "current"
+        .map_err(|error| format!("Unable to read Context Ref origin observation: {error}"))?
+        .map(|revision| GraphBasis {
+            project_id: stored_project.clone(),
+            graph_id: graph_id.clone(),
+            graph_version: graph_version as u64,
+            source_revision: revision,
+            observation_id: origin_observation_id.clone(),
+        });
+    let current = connection
+        .query_row(
+            "SELECT observation.observation_id, observation.git_revision,
+                    observation.graph_version, graph.graph_id
+             FROM project_state state
+             JOIN graph_observations observation ON observation.observation_id = state.current_observation_id
+             JOIN graph_versions graph ON graph.graph_version = observation.graph_version
+             WHERE state.project_id = ?1",
+            params![project_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Unable to read current graph observation: {error}"))?;
+    let (status, freshness_reason, current_basis) = match current {
+        Some((current_observation_id, current_revision, current_version, current_graph_id)) => {
+            let current_basis = Some(GraphBasis {
+                project_id: project_id.to_string(),
+                graph_id: current_graph_id,
+                graph_version: current_version as u64,
+                source_revision: current_revision,
+                observation_id: current_observation_id,
+            });
+            let current_evidence = connection
+                .query_row(
+                    "SELECT node.evidence_fingerprint, source.hash
+                     FROM graph_nodes node
+                     LEFT JOIN source_files source ON source.graph_version = node.graph_version
+                         AND source.path = node.path
+                     WHERE node.graph_version = ?1 AND node.node_id = ?2",
+                    params![current_version, node_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .optional()
+                .map_err(|error| format!("Unable to read current node evidence: {error}"))?;
+            let current_fingerprint = current_evidence.as_ref().and_then(|(node, file)| {
+                if fingerprint_scope == "legacy-file-v1" {
+                    file.as_deref()
+                } else {
+                    Some(node.as_str())
+                }
+            });
+            let result = if origin_observation_id.is_empty() || origin_fingerprint.is_empty() {
+                (
+                    "unresolved",
+                    "legacy Context Ref has insufficient origin evidence",
+                )
+            } else if current_evidence.is_none() {
+                ("stale", "origin node is missing from the current graph")
+            } else if fingerprint_scope == "legacy-file-v1" {
+                if current_fingerprint == Some(origin_fingerprint.as_str()) {
+                    ("current", "legacy file evidence matches")
+                } else {
+                    ("stale", "legacy file evidence changed")
+                }
+            } else if current_fingerprint == Some(origin_fingerprint.as_str()) {
+                ("current", "node AST and direct-edge fingerprint matches")
             } else {
-                "stale"
-            }
+                ("stale", "node AST or direct-edge fingerprint changed")
+            };
+            (result.0, result.1, current_basis)
         }
-        Some(_) => "stale",
-        None => "unavailable",
+        None => (
+            "unavailable",
+            "current graph observation is unavailable",
+            None,
+        ),
     };
     Ok(ContextRef {
         schema_version: CONTEXT_REF_SCHEMA.to_string(),
@@ -109,6 +229,13 @@ pub fn resolve(
         graph_version: graph_version as u64,
         node_id,
         status: status.to_string(),
+        origin_observation_id,
+        origin_source_revision,
+        origin_fingerprint,
+        fingerprint_scope,
+        freshness_reason: freshness_reason.to_string(),
+        origin_basis,
+        current_basis,
     })
 }
 
@@ -130,6 +257,8 @@ mod tests {
             graph_id: "graph".to_string(),
             graph_version: 1,
             source_revision: "unavailable".to_string(),
+            source_fingerprint: String::new(),
+            observation_id: String::new(),
             files: Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),

@@ -7,7 +7,7 @@
 use crate::model::{
     ContextRef, DIAGNOSTIC_ASSERTION_SCHEMA, DIAGNOSTIC_CONTEXT_SCHEMA, DIAGNOSTIC_PACKET_SCHEMA,
     DiagnosticAssertion, DiagnosticContext, DiagnosticLimits, DiagnosticPacket, EvidenceReference,
-    GitBasis, GraphBasis, GraphNode, HISTORICAL_CANDIDATE_SCHEMA, HISTORICAL_SNAPSHOT_SCHEMA,
+    GitBasis, GraphBasis, GraphNode, HISTORICAL_DIAGNOSIS_SCHEMA, HISTORICAL_SNAPSHOT_SCHEMA,
     HistoricalCandidate, HistoricalDiagnosis, HistoricalSnapshot,
 };
 use crate::store;
@@ -20,6 +20,8 @@ use std::process::Command;
 const MAX_ID_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_LIST_ITEMS: usize = 256;
+const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v2";
+const HISTORY_PARSER_ID: &str = "tree-sitter-typescript-0.23.2";
 
 const ALLOWED_INTENTS: &[&str] = &["diagnose", "audit", "verify-fix"];
 const ALLOWED_CONTEXT_STATUSES: &[&str] = &["open", "reconciled", "resolved", "superseded"];
@@ -159,6 +161,7 @@ pub fn diagnose_history(
         graph_id: graph.graph_id.clone(),
         graph_version: graph.graph_version,
         source_revision: graph.source_revision.clone(),
+        observation_id: graph.observation_id.clone(),
     };
     let mut limitations = vec![
         "Historical candidates are deterministic path/topology relevance signals, not runtime causes or root-cause findings.".to_string(),
@@ -169,7 +172,7 @@ pub fn diagnose_history(
             "last-known-good basis is unavailable; no historical range was inspected.".to_string(),
         );
         return Ok(HistoricalDiagnosis {
-            schema_version: HISTORICAL_CANDIDATE_SCHEMA.to_string(),
+            schema_version: HISTORICAL_DIAGNOSIS_SCHEMA.to_string(),
             context_id: context.id,
             current_graph_basis: current_basis,
             last_known_good_basis: None,
@@ -182,33 +185,52 @@ pub fn diagnose_history(
         });
     };
 
-    if limits.max_commits == 0 {
-        limitations
-            .push("history limit max_commits is zero; no commits were inspected.".to_string());
-        return Ok(HistoricalDiagnosis {
-            schema_version: HISTORICAL_CANDIDATE_SCHEMA.to_string(),
-            context_id: context.id,
-            current_graph_basis: current_basis,
-            last_known_good_basis: Some(last_known_good),
-            range: None,
-            commits_inspected: 0,
-            candidates: Vec::new(),
-            truncated: false,
-            omissions: Vec::new(),
-            limitations,
-        });
-    }
-
     let last_revision = resolve_revision(root, &last_known_good.revision)?;
     let current_revision = current_head(root)?;
     let range = format!("{last_revision}..{current_revision}");
+    if graph.source_revision != current_revision || git_is_dirty(root) {
+        limitations.push(
+            "historical diagnosis is unavailable because the persisted graph does not match a clean current Git source state.".to_string(),
+        );
+        if graph.source_revision != current_revision {
+            limitations.push(format!(
+                "source revision mismatch: graph={} current={current_revision}",
+                graph.source_revision
+            ));
+        }
+        if git_is_dirty(root) {
+            limitations.push(
+                "Git working tree is dirty; historical candidates were not computed.".to_string(),
+            );
+        }
+        let mut omissions = vec![
+            "historical candidates unavailable for dirty or mismatched source state".to_string(),
+        ];
+        if limits.max_commits == 0 {
+            omissions.push("history commits omitted because max_commits is zero".to_string());
+        }
+        return Ok(HistoricalDiagnosis {
+            schema_version: HISTORICAL_DIAGNOSIS_SCHEMA.to_string(),
+            context_id: context.id,
+            current_graph_basis: current_basis,
+            last_known_good_basis: Some(GitBasis {
+                revision: last_revision,
+            }),
+            range: Some(range),
+            commits_inspected: 0,
+            candidates: Vec::new(),
+            truncated: limits.max_commits == 0,
+            omissions,
+            limitations,
+        });
+    }
     if last_revision == current_revision {
         limitations.push(
             "last-known-good and current revisions are identical; the inspected range is empty."
                 .to_string(),
         );
         return Ok(HistoricalDiagnosis {
-            schema_version: HISTORICAL_CANDIDATE_SCHEMA.to_string(),
+            schema_version: HISTORICAL_DIAGNOSIS_SCHEMA.to_string(),
             context_id: context.id,
             current_graph_basis: current_basis,
             last_known_good_basis: Some(GitBasis {
@@ -223,8 +245,28 @@ pub fn diagnose_history(
         });
     }
 
+    if limits.max_commits == 0 {
+        limitations
+            .push("history limit max_commits is zero; no commits were inspected.".to_string());
+        return Ok(HistoricalDiagnosis {
+            schema_version: HISTORICAL_DIAGNOSIS_SCHEMA.to_string(),
+            context_id: context.id,
+            current_graph_basis: current_basis,
+            last_known_good_basis: Some(GitBasis {
+                revision: last_revision,
+            }),
+            range: Some(range),
+            commits_inspected: 0,
+            candidates: Vec::new(),
+            truncated: true,
+            omissions: vec!["history commits omitted because max_commits is zero".to_string()],
+            limitations,
+        });
+    }
+
     let (focus_paths, cone_paths, mut focus_limitations) =
         focus_paths(root, &context, &graph, &limits)?;
+    let focus_limit_truncated = context.focus_context_refs.len() > limits.max_context_refs;
     limitations.append(&mut focus_limitations);
     let log_limit = limits.max_commits.saturating_add(1);
     let commits = git_log(root, &last_revision, &current_revision, log_limit)?;
@@ -237,12 +279,20 @@ pub fn diagnose_history(
     let mut omissions = Vec::new();
     let mut snapshot_cache = BTreeMap::new();
     let path_bound_zero = limits.max_paths == 0;
+    let snapshot_bound_zero = limits.max_snapshot_bytes == 0;
     if path_bound_zero {
         omissions.push("historical candidate paths capped at zero".to_string());
     }
+    if snapshot_bound_zero {
+        omissions.push("historical snapshot bytes capped at zero".to_string());
+    }
 
     for commit in &inspected {
-        let mut changed_paths = git_changed_paths(root, &commit.sha)?;
+        let mut changed_paths = git_changed_paths(
+            root,
+            &commit.sha,
+            commit.parents.first().map(String::as_str),
+        )?;
         changed_paths.sort();
         changed_paths.dedup();
         let original_path_count = changed_paths.len();
@@ -314,22 +364,36 @@ pub fn diagnose_history(
         let current_files = graph
             .files
             .iter()
-            .map(|file| file.path.as_str())
-            .collect::<BTreeSet<_>>();
-        let retention_status = if changed_paths
-            .iter()
-            .all(|path| current_files.contains(path.as_str()))
-        {
-            "retained"
-        } else {
+            .map(|file| (file.path.as_str(), file.hash.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        let mut retained_path = false;
+        let mut changed_path = false;
+        let mut removed_path = false;
+        for path in &changed_paths {
+            let Some(current_hash) = current_files.get(path.as_str()) else {
+                removed_path = true;
+                continue;
+            };
+            retained_path = true;
+            match git_show_bytes(root, &commit.sha, path) {
+                Ok(bytes) if blake3::hash(&bytes).to_hex().to_string() == *current_hash => {}
+                Ok(_) => changed_path = true,
+                Err(_) => changed_path = true,
+            }
+        }
+        let retention_status = if !retained_path {
             "removed"
+        } else if changed_path || removed_path {
+            "changed"
+        } else {
+            "retained"
         };
         let id_input = format!(
             "flopeek-historical-candidate-v1\0{}\0{}\0{}",
             context.id, current_basis.graph_id, commit.sha
         );
         candidates.push(HistoricalCandidate {
-            schema_version: HISTORICAL_CANDIDATE_SCHEMA.to_string(),
+            schema_version: HISTORICAL_DIAGNOSIS_SCHEMA.to_string(),
             id: format!("candidate_{}", blake3::hash(id_input.as_bytes()).to_hex()),
             project_id: graph.project_id.clone(),
             context_id: context.id.clone(),
@@ -352,7 +416,8 @@ pub fn diagnose_history(
             .cmp(&left.score)
             .then_with(|| left.commit.cmp(&right.commit))
     });
-    let mut truncated = truncated_commits || path_bound_zero;
+    let mut truncated =
+        truncated_commits || path_bound_zero || snapshot_bound_zero || focus_limit_truncated;
     if truncated_commits {
         omissions.push(format!("history commits capped at {}", limits.max_commits));
     }
@@ -370,7 +435,7 @@ pub fn diagnose_history(
         truncated = true;
     }
     let diagnosis = HistoricalDiagnosis {
-        schema_version: HISTORICAL_CANDIDATE_SCHEMA.to_string(),
+        schema_version: HISTORICAL_DIAGNOSIS_SCHEMA.to_string(),
         context_id: context.id,
         current_graph_basis: current_basis,
         last_known_good_basis: Some(GitBasis {
@@ -401,6 +466,7 @@ pub fn build_packet(
         graph_id: graph.graph_id.clone(),
         graph_version: graph.graph_version,
         source_revision: graph.source_revision.clone(),
+        observation_id: graph.observation_id.clone(),
     };
     let mut focus_context_refs = Vec::new();
     let mut focus_nodes = Vec::new();
@@ -427,13 +493,28 @@ pub fn build_packet(
         focus_context_refs.push(resolved);
     }
     let mut assertions = store::list_diagnostic_assertions(root, context_id)?;
-    if assertions.len() > limits.max_assertions {
+    let assertion_total = assertions.len();
+    if assertion_total > limits.max_assertions {
         assertions.truncate(limits.max_assertions);
         omissions.push(format!("assertions capped at {}", limits.max_assertions));
     }
     let historical = diagnose_history(root, context_id, limits.clone())?;
+    if historical.truncated {
+        omissions
+            .push("historical diagnosis was truncated by one or more declared bounds".to_string());
+    }
+    omissions.extend(
+        historical
+            .omissions
+            .iter()
+            .take(8)
+            .map(|omission| format!("historical: {omission}")),
+    );
     let mut limitations = historical.limitations.clone();
     limitations.push("Assertions retain their declared evidence class and attribution; they are not parser facts.".to_string());
+    let packet_truncated = historical.truncated
+        || focus_context_refs.len() < context.focus_context_refs.len()
+        || assertions.len() < assertion_total;
     let mut packet = DiagnosticPacket {
         schema_version: DIAGNOSTIC_PACKET_SCHEMA.to_string(),
         current_graph_basis: current_basis.clone(),
@@ -445,7 +526,7 @@ pub fn build_packet(
         context,
         limitations,
         omissions,
-        truncated: false,
+        truncated: packet_truncated,
     };
     trim_packet(&mut packet, limits.max_packet_bytes)?;
     Ok(packet)
@@ -612,16 +693,34 @@ fn load_or_build_historical_snapshot(
     limits: &DiagnosticLimits,
     cache: &mut BTreeMap<String, HistoricalSnapshot>,
 ) -> Result<HistoricalSnapshot, String> {
-    if let Some(snapshot) = cache.get(revision) {
+    let cache_key = format!(
+        "{revision}\0{HISTORY_DERIVATION_ID}\0{HISTORY_PARSER_ID}\0{}\0{}",
+        limits.max_paths, limits.max_snapshot_bytes
+    );
+    if let Some(snapshot) = cache.get(&cache_key) {
         return Ok(snapshot.clone());
     }
-    if let Some(snapshot) = crate::history_store::load(root, revision)? {
-        cache.insert(revision.to_string(), snapshot.clone());
+    if let Some(snapshot) = crate::history_store::load_with_key(
+        root,
+        revision,
+        HISTORY_DERIVATION_ID,
+        HISTORY_PARSER_ID,
+        limits.max_paths,
+        limits.max_snapshot_bytes,
+    )? {
+        cache.insert(cache_key, snapshot.clone());
         return Ok(snapshot);
     }
     let snapshot = build_historical_snapshot(root, revision, limits)?;
-    crate::history_store::save(root, &snapshot)?;
-    cache.insert(revision.to_string(), snapshot.clone());
+    crate::history_store::save_with_key(
+        root,
+        &snapshot,
+        HISTORY_DERIVATION_ID,
+        HISTORY_PARSER_ID,
+        limits.max_paths,
+        limits.max_snapshot_bytes,
+    )?;
+    cache.insert(cache_key, snapshot.clone());
     Ok(snapshot)
 }
 
@@ -686,6 +785,7 @@ fn build_historical_snapshot(
     let (mut graph_snapshot, _) = built?;
     graph_snapshot.project_id = crate::graph::project_id(root);
     graph_snapshot.source_revision = revision.to_string();
+    graph_snapshot.observation_id.clear();
     graph_snapshot.graph_version = 0;
     graph_snapshot.truncated |= truncated;
     graph_snapshot.omissions.extend(omissions);
@@ -813,6 +913,7 @@ fn focus_paths(
 pub(crate) fn validate_basis(basis: &GraphBasis) -> Result<(), String> {
     validate_id("graph project id", &basis.project_id)?;
     validate_id("graph id", &basis.graph_id)?;
+    validate_id("observation id", &basis.observation_id)?;
     if basis.graph_version == 0 {
         return Err("currentGraphBasis.graphVersion must be greater than zero.".to_string());
     }
@@ -890,6 +991,24 @@ fn current_head(root: &Path) -> Result<String, String> {
     git_output(root, &["rev-parse", "--verify", "HEAD"])
 }
 
+fn git_is_dirty(root: &Path) -> bool {
+    let Ok(output) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()
+    else {
+        return true;
+    };
+    if !output.status.success() {
+        return true;
+    }
+    String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+        let path = line.get(3..).unwrap_or_default().replace('\\', "/");
+        !(path == ".flopeek" || path.starts_with(".flopeek/"))
+    })
+}
+
 fn resolve_revision(root: &Path, revision: &str) -> Result<String, String> {
     validate_revision(revision)?;
     let expression = format!("{revision}^{{commit}}");
@@ -938,25 +1057,65 @@ fn git_log(
     Ok(records)
 }
 
-fn git_changed_paths(root: &Path, commit: &str) -> Result<Vec<String>, String> {
-    let output = git_output(
-        root,
-        &[
-            "diff-tree",
-            "--no-commit-id",
-            "--name-only",
-            "--root",
-            "-r",
-            "--diff-filter=ACDMRT",
-            commit,
-            "--",
-        ],
-    )?;
-    Ok(output
-        .lines()
-        .map(|path| path.replace('\\', "/"))
-        .filter(|path| !path.is_empty())
-        .collect())
+fn git_changed_paths(
+    root: &Path,
+    commit: &str,
+    first_parent: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let output = if let Some(parent) = first_parent {
+        git_output_bytes(
+            root,
+            &[
+                "diff",
+                "--name-status",
+                "-z",
+                "--find-renames",
+                "--find-copies",
+                "--diff-filter=ACDMRT",
+                parent,
+                commit,
+                "--",
+            ],
+        )?
+    } else {
+        git_output_bytes(
+            root,
+            &[
+                "diff-tree",
+                "--no-commit-id",
+                "--name-status",
+                "-z",
+                "--find-renames",
+                "--find-copies",
+                "--root",
+                "-r",
+                "--diff-filter=ACDMRT",
+                commit,
+                "--",
+            ],
+        )?
+    };
+    let fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| String::from_utf8_lossy(field).replace('\\', "/"))
+        .collect::<Vec<_>>();
+    let mut paths = Vec::new();
+    let mut index = 0;
+    while index < fields.len() {
+        let status = &fields[index];
+        index += 1;
+        let Some(path) = fields.get(index) else { break };
+        index += 1;
+        paths.push(path.clone());
+        if (status.starts_with('R') || status.starts_with('C'))
+            && let Some(new_path) = fields.get(index)
+        {
+            paths.push(new_path.clone());
+            index += 1;
+        }
+    }
+    Ok(paths)
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
@@ -977,12 +1136,31 @@ fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn git_output_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|error| format!("Unable to execute bounded Git query: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "Bounded Git query failed.".to_string()
+        } else {
+            format!("Bounded Git query failed: {detail}")
+        });
+    }
+    Ok(output.stdout)
+}
+
 pub fn graph_basis(graph_snapshot: &crate::model::GraphSnapshot) -> GraphBasis {
     GraphBasis {
         project_id: graph_snapshot.project_id.clone(),
         graph_id: graph_snapshot.graph_id.clone(),
         graph_version: graph_snapshot.graph_version,
         source_revision: graph_snapshot.source_revision.clone(),
+        observation_id: graph_snapshot.observation_id.clone(),
     }
 }
 
@@ -997,6 +1175,7 @@ mod tests {
     use crate::{graph, store};
     use rusqlite::OptionalExtension;
     use std::fs;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1082,6 +1261,98 @@ mod tests {
             supersedes: None,
         };
         (context, payment_ref)
+    }
+
+    fn copy_fixture_tree(source: &Path, destination: &Path) {
+        for entry in fs::read_dir(source).expect("fixture directory") {
+            let entry = entry.expect("fixture entry");
+            let from = entry.path();
+            let to = destination.join(entry.file_name());
+            if from.is_dir() {
+                fs::create_dir_all(&to).expect("fixture destination directory");
+                copy_fixture_tree(&from, &to);
+            } else {
+                if let Some(parent) = to.parent() {
+                    fs::create_dir_all(parent).expect("fixture parent");
+                }
+                fs::copy(from, to).expect("fixture file");
+            }
+        }
+    }
+
+    #[test]
+    fn real_fixture_merge_is_reported_as_first_parent_candidate() {
+        let root = fixture_root();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/typescript/history");
+        copy_fixture_tree(&fixture.join("A"), &root);
+        let a = commit(&root, "A: checkout payment last-known-good");
+        let main_branch = git(&root, &["branch", "--show-current"]);
+        git(&root, &["switch", "-c", "retry-topic"]);
+        copy_fixture_tree(&fixture.join("B"), &root);
+        let topic = commit(&root, "topic: introduce retry path");
+        git(&root, &["switch", &main_branch]);
+        let _merge_output = git(
+            &root,
+            &[
+                "merge",
+                "--no-ff",
+                "retry-topic",
+                "-m",
+                "B: merge retry path",
+            ],
+        );
+        let merge = git(&root, &["rev-parse", "HEAD"]);
+        assert_ne!(merge, topic);
+        fs::write(root.join("README.md"), "unrelated documentation\n").expect("C");
+        let _c = commit(&root, "C: unrelated documentation");
+        copy_fixture_tree(&fixture.join("D"), &root);
+        let d = commit(&root, "D: change timeout branch");
+        copy_fixture_tree(&fixture.join("E"), &root);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(root.join("src/checkout.ts"))
+            .expect("E checkout")
+            .write_all(b"\nexport const currentBadState = true;\n")
+            .expect("E current state");
+        let _e = commit(&root, "E: current bad state");
+
+        let (context, _) = context_for(&root);
+        let context = store::create_diagnostic_context(&root, context).expect("context");
+        let diagnosis =
+            diagnose_history(&root, &context.id, DiagnosticLimits::default()).expect("history");
+        assert_eq!(
+            diagnosis
+                .last_known_good_basis
+                .as_ref()
+                .map(|basis| basis.revision.as_str()),
+            Some(a.as_str())
+        );
+        assert!(
+            diagnosis
+                .candidates
+                .iter()
+                .any(|candidate| candidate.commit == merge)
+        );
+        assert!(
+            !diagnosis
+                .candidates
+                .iter()
+                .any(|candidate| candidate.commit == topic)
+        );
+        assert!(
+            diagnosis
+                .candidates
+                .iter()
+                .any(|candidate| candidate.commit == d)
+        );
+        assert!(diagnosis.candidates.iter().all(|candidate| {
+            candidate
+                .relevance_reasons
+                .iter()
+                .all(|reason| reason != "root-cause")
+        }));
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

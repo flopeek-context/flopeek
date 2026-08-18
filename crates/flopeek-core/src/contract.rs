@@ -13,6 +13,9 @@ pub fn validate() -> Result<(), String> {
         || value["llmRequired"] != false
         || value["automaticRootCauseClaims"] != false
         || value["javascriptRepositoryAuthority"] != false
+        || value["graphIdentityBasis"] != "typescript-structural-evidence"
+        || value["sourceBasis"] != "immutable-graph-observation"
+        || value["contextFreshness"] != "node-ast-and-direct-edges"
     {
         return Err("Product contract violates the Rust/SQLite TypeScript boundary.".to_string());
     }

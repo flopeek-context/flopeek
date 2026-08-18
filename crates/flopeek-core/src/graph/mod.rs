@@ -47,6 +47,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
             path: Some(file.path.clone()),
             name: None,
             language: Some(file.language.clone()),
+            evidence_fingerprint: String::new(),
         });
     }
     for fact in &facts {
@@ -54,18 +55,23 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
             .get(&fact.path)
             .ok_or_else(|| format!("Missing file node for {}", fact.path))?;
         for declaration in &fact.declarations {
-            let id = node_id("symbol", &fact.path, &declaration.name);
-            nodes.push(GraphNode {
-                id: id.clone(),
-                kind: declaration.kind.clone(),
-                path: Some(fact.path.clone()),
-                name: Some(declaration.name.clone()),
-                language: Some(fact.language.clone()),
-            });
-            declaration_ids
-                .entry(declaration.name.clone())
-                .or_default()
-                .push(id.clone());
+            let normalized_kind = normalize_symbol_kind(&declaration.kind);
+            let qualified_name = format!("{normalized_kind}:{}", declaration.name);
+            let id = node_id("symbol", &fact.path, &qualified_name);
+            if !nodes.iter().any(|node| node.id == id) {
+                nodes.push(GraphNode {
+                    id: id.clone(),
+                    kind: normalized_kind,
+                    path: Some(fact.path.clone()),
+                    name: Some(declaration.name.clone()),
+                    language: Some(fact.language.clone()),
+                    evidence_fingerprint: String::new(),
+                });
+            }
+            let ids = declaration_ids.entry(declaration.name.clone()).or_default();
+            if !ids.contains(&id) {
+                ids.push(id.clone());
+            }
             edges.push(GraphEdge {
                 from: file_id.clone(),
                 to: id,
@@ -99,6 +105,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
                         path: None,
                         name: Some(import.specifier.clone()),
                         language: None,
+                        evidence_fingerprint: String::new(),
                     });
                 }
                 edges.push(GraphEdge {
@@ -139,6 +146,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
             .then_with(|| left.evidence.cmp(&right.evidence))
     });
     edges.dedup();
+    assign_node_fingerprints(&mut nodes, &edges, &facts);
     if nodes.len() > MAX_GRAPH_NODES {
         nodes.truncate(MAX_GRAPH_NODES);
         truncated = true;
@@ -152,10 +160,15 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
 
     let project_id = project_id(root);
     let source_revision = source_revision(root);
+    let source_fingerprint = exact_source_fingerprint(&files)?;
+    let identity_files = files
+        .iter()
+        .map(|file| (&file.path, &file.language))
+        .collect::<Vec<_>>();
     let identity = GraphIdentity {
         project_id: &project_id,
-        source_revision: &source_revision,
-        files: &files,
+        derivation_id: "typescript-structural-evidence-v2",
+        files: &identity_files,
         nodes: &nodes,
         edges: &edges,
     };
@@ -170,6 +183,8 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
             graph_id,
             graph_version: 0,
             source_revision,
+            source_fingerprint,
+            observation_id: String::new(),
             files,
             nodes,
             edges,
@@ -183,10 +198,113 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
 #[derive(Serialize)]
 struct GraphIdentity<'a> {
     project_id: &'a str,
-    source_revision: &'a str,
-    files: &'a [SourceFile],
+    derivation_id: &'a str,
+    files: &'a Vec<(&'a String, &'a String)>,
     nodes: &'a [GraphNode],
     edges: &'a [GraphEdge],
+}
+
+fn exact_source_fingerprint(files: &[SourceFile]) -> Result<String, String> {
+    let canonical = files
+        .iter()
+        .map(|file| (&file.path, &file.language, file.bytes, &file.hash))
+        .collect::<Vec<_>>();
+    serde_json::to_vec(&canonical)
+        .map(|bytes| blake3::hash(&bytes).to_hex().to_string())
+        .map_err(|error| format!("Unable to derive source fingerprint: {error}"))
+}
+
+fn normalize_symbol_kind(kind: &str) -> String {
+    kind.trim().to_ascii_lowercase().replace(['-', ' '], "_")
+}
+
+fn assign_node_fingerprints(
+    nodes: &mut [GraphNode],
+    edges: &[GraphEdge],
+    facts: &[TypeScriptFacts],
+) {
+    let mut intrinsic = BTreeMap::<String, String>::new();
+    for node in nodes.iter() {
+        let value = if node.kind == "file" {
+            node.path
+                .as_deref()
+                .and_then(|path| facts.iter().find(|fact| fact.path == path))
+                .map(canonical_fact)
+                .unwrap_or_default()
+        } else {
+            let exported = node
+                .path
+                .as_deref()
+                .and_then(|path| facts.iter().find(|fact| fact.path == path))
+                .and_then(|fact| {
+                    fact.declarations.iter().find(|declaration| {
+                        declaration.name == node.name.as_deref().unwrap_or_default()
+                            && normalize_symbol_kind(&declaration.kind) == node.kind
+                    })
+                })
+                .is_some_and(|declaration| declaration.exported);
+            let mut declaration_fingerprints = node
+                .path
+                .as_deref()
+                .and_then(|path| facts.iter().find(|fact| fact.path == path))
+                .map(|fact| {
+                    fact.declarations
+                        .iter()
+                        .filter(|declaration| {
+                            declaration.name == node.name.as_deref().unwrap_or_default()
+                                && normalize_symbol_kind(&declaration.kind) == node.kind
+                        })
+                        .map(|declaration| {
+                            format!("{}:{}", declaration.ast_fingerprint, declaration.exported)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            declaration_fingerprints.sort();
+            let declaration_fingerprint = declaration_fingerprints.join("|");
+            format!(
+                "symbol\0{}\0{}\0{}\0exported={exported}\0ast={declaration_fingerprint}",
+                node.kind,
+                node.path.as_deref().unwrap_or_default(),
+                node.name.as_deref().unwrap_or_default()
+            )
+        };
+        intrinsic.insert(node.id.clone(), value);
+    }
+    for node in nodes {
+        let mut signatures = edges
+            .iter()
+            .filter_map(|edge| {
+                if edge.from == node.id {
+                    Some(format!(
+                        "out\0{}\0{}\0{}",
+                        edge.kind, edge.evidence, edge.to
+                    ))
+                } else if edge.to == node.id {
+                    Some(format!(
+                        "in\0{}\0{}\0{}",
+                        edge.kind, edge.evidence, edge.from
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        signatures.sort();
+        let mut canonical = intrinsic.remove(&node.id).unwrap_or_default();
+        for signature in signatures {
+            canonical.push('\0');
+            canonical.push_str(&signature);
+        }
+        node.evidence_fingerprint = blake3::hash(canonical.as_bytes()).to_hex().to_string();
+    }
+}
+
+fn canonical_fact(fact: &TypeScriptFacts) -> String {
+    format!(
+        "{}\0{}\0{}\0{}",
+        fact.language, fact.parser, fact.parse_status, fact.canonical_fingerprint
+    )
 }
 
 pub fn node_id(kind: &str, path: &str, name: &str) -> String {
@@ -232,10 +350,16 @@ pub fn source_revision(root: &Path) -> String {
             &root.to_string_lossy(),
             "status",
             "--porcelain",
-            "--untracked-files=no",
+            "--untracked-files=all",
         ])
         .output()
-        .is_ok_and(|output| output.status.success() && !output.stdout.is_empty());
+        .is_ok_and(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+                    let path = line.get(3..).unwrap_or_default().replace('\\', "/");
+                    !(path == ".flopeek" || path.starts_with(".flopeek/"))
+                })
+        });
     if dirty {
         format!("{revision}+dirty")
     } else {
@@ -308,6 +432,28 @@ mod tests {
         let (first, _) = build(&root).expect("first graph");
         let (second, _) = build(&root).expect("second graph");
         assert_eq!(first.graph_id, second.graph_id);
+        assert_eq!(first.nodes, second.nodes);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn structural_graph_ignores_comments_and_whitespace_but_tracks_exact_source() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("flopeek-graph-freshness-{suffix}"));
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(root.join("src/a.ts"), "export const a = 1;\n").expect("write");
+        let first = build(&root).expect("first graph").0;
+        fs::write(
+            root.join("src/a.ts"),
+            "// comment\n\n export   const a = 1;\n",
+        )
+        .expect("format");
+        let second = build(&root).expect("second graph").0;
+        assert_eq!(first.graph_id, second.graph_id);
+        assert_ne!(first.source_fingerprint, second.source_fingerprint);
         assert_eq!(first.nodes, second.nodes);
         fs::remove_dir_all(root).expect("cleanup");
     }
