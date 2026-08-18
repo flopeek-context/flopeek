@@ -30,3 +30,23 @@ static class calls, and statically defensible constructor expressions resolve
 to symbol-level edges; public or inherited dispatch, `super`, computed
 members, mixins, getters/setters, and callable fields remain explicitly
 unresolved.
+
+The crate also derives framework-neutral TypeScript context flows from a bounded
+root `package.json`. Literal supported script runners (`tsx`, `ts-node`,
+`ts-node-esm`, `node`, `bun`, `bun run`, and `deno run`) plus literal `bin`,
+`main`, and `module` targets become stable entry records when they resolve to a
+known TypeScript/TSX file. Shell-composed commands, flags, wrappers, absolute
+or escaping paths, JavaScript output, declaration files, and missing targets
+are reported as explicit unavailable entry evidence. Flow traversal is a
+deterministic, bounded BFS over only proven `calls` and `constructs` edges;
+imports, declarations, heritage, dynamic references, and related-test matches
+never become flow transitions.
+
+`listFlows`, `getFlow`, `resolveFlowRef`, and `getRelatedTests` expose the
+persisted flow projection. Related tests use only direct call/construct
+evidence (strong) or direct non-type-only imports (weak), excluding naming,
+global-symbol, test-to-test, type-only, and transitive guesses. Flow Refs keep
+their origin observation immutable and resolve current versus stale using entry,
+step, topology, and related-test fingerprints. Package manifest metadata is
+limited to relative path, size, hash, normalized entry facts, bounds, and
+omissions; command and manifest bodies are never persisted.

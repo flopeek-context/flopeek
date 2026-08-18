@@ -5,10 +5,11 @@
 //! change, never proof that the change caused a runtime symptom.
 
 use crate::model::{
-    ContextRef, DIAGNOSTIC_ASSERTION_SCHEMA, DIAGNOSTIC_CONTEXT_SCHEMA, DIAGNOSTIC_PACKET_SCHEMA,
-    DiagnosticAssertion, DiagnosticContext, DiagnosticLimits, DiagnosticPacket, EvidenceReference,
-    GitBasis, GraphBasis, GraphNode, HISTORICAL_CANDIDATE_SCHEMA, HISTORICAL_DIAGNOSIS_SCHEMA,
-    HISTORICAL_SNAPSHOT_SCHEMA, HistoricalCandidate, HistoricalDiagnosis, HistoricalSnapshot,
+    ContextFlow, ContextRef, DIAGNOSTIC_ASSERTION_SCHEMA, DIAGNOSTIC_CONTEXT_SCHEMA,
+    DIAGNOSTIC_PACKET_SCHEMA, DiagnosticAssertion, DiagnosticContext, DiagnosticLimits,
+    DiagnosticPacket, EvidenceReference, GitBasis, GraphBasis, GraphNode,
+    HISTORICAL_CANDIDATE_SCHEMA, HISTORICAL_DIAGNOSIS_SCHEMA, HISTORICAL_SNAPSHOT_SCHEMA,
+    HistoricalCandidate, HistoricalDiagnosis, HistoricalSnapshot, RelatedTestEvidence,
 };
 use crate::module_resolution::{MAX_CONFIG_BYTES, MAX_CONFIG_FILES, config_extends};
 use crate::store;
@@ -22,7 +23,7 @@ use std::process::Command;
 const MAX_ID_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_LIST_ITEMS: usize = 256;
-const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v5";
+const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v6";
 
 const ALLOWED_INTENTS: &[&str] = &["diagnose", "audit", "verify-fix"];
 const ALLOWED_CONTEXT_STATUSES: &[&str] = &["open", "reconciled", "resolved", "superseded"];
@@ -73,6 +74,15 @@ pub fn validate_context(context: &DiagnosticContext) -> Result<(), String> {
             return Err(
                 "focusContextRefs must contain bounded fp://local Context Refs.".to_string(),
             );
+        }
+    }
+    validate_list("focusFlowRefs", &context.focus_flow_refs, MAX_LIST_ITEMS)?;
+    for reference in &context.focus_flow_refs {
+        if !reference.starts_with("fp://local/")
+            || !reference.contains("/flow/")
+            || reference.len() > 768
+        {
+            return Err("focusFlowRefs must contain bounded fp://local Flow Refs.".to_string());
         }
     }
     validate_basis(&context.current_graph_basis)?;
@@ -265,7 +275,7 @@ pub fn diagnose_history(
         });
     }
 
-    let (focus_paths, cone_paths, mut focus_limitations) =
+    let (focus_paths, cone_paths, focus_flow_ids, mut focus_limitations) =
         focus_paths(root, &context, &graph, &limits)?;
     let focus_limit_truncated = context.focus_context_refs.len() > limits.max_context_refs;
     limitations.append(&mut focus_limitations);
@@ -297,7 +307,10 @@ pub fn diagnose_history(
         changed_paths.sort();
         changed_paths.dedup();
         let original_path_count = changed_paths.len();
-        changed_paths.retain(|path| is_typescript_path(path));
+        changed_paths.retain(|path| {
+            is_typescript_path(path)
+                || (*path == "package.json" && !context.focus_flow_refs.is_empty())
+        });
         if changed_paths.is_empty() {
             continue;
         }
@@ -314,16 +327,13 @@ pub fn diagnose_history(
             reasons.push("changed-path-in-dependency-cone".to_string());
             score += 60;
         }
-        if changed_paths.iter().any(|path| is_test_path(path)) {
-            reasons.push("related-test-structure-changed".to_string());
-            score += 25;
-        }
         if limits.max_snapshot_bytes > 0 && !commit.parents.is_empty() {
             match historical_delta_reasons(
                 root,
                 commit,
                 &focus_paths,
                 &cone_paths,
+                &focus_flow_ids,
                 &limits,
                 &mut snapshot_cache,
             ) {
@@ -371,6 +381,26 @@ pub fn diagnose_history(
         let mut changed_path = false;
         let mut removed_path = false;
         for path in &changed_paths {
+            if path == "package.json" {
+                let current_hash = graph
+                    .entry_evidence
+                    .manifest
+                    .as_ref()
+                    .map(|manifest| manifest.hash.as_str());
+                match (current_hash, git_show_bytes(root, &commit.sha, path)) {
+                    (Some(current_hash), Ok(bytes))
+                        if blake3::hash(&bytes).to_hex().to_string() == current_hash =>
+                    {
+                        retained_path = true;
+                    }
+                    (Some(_), Ok(_)) => {
+                        retained_path = true;
+                        changed_path = true;
+                    }
+                    _ => removed_path = true,
+                }
+                continue;
+            }
             let Some(current_hash) = current_files.get(path.as_str()) else {
                 removed_path = true;
                 continue;
@@ -493,6 +523,72 @@ pub fn build_packet(
         }
         focus_context_refs.push(resolved);
     }
+    let mut focus_flow_refs = Vec::new();
+    let mut focus_flows = Vec::new();
+    let mut related_tests = RelatedTestEvidence {
+        schema_version: crate::model::RELATED_TEST_EVIDENCE_SCHEMA.to_string(),
+        status: "complete".to_string(),
+        records: Vec::new(),
+        truncated: false,
+        omissions: Vec::new(),
+    };
+    for (index, uri) in context.focus_flow_refs.iter().enumerate() {
+        if index >= limits.max_context_refs {
+            omissions.push(format!(
+                "focus Flow Refs capped at {}",
+                limits.max_context_refs
+            ));
+            break;
+        }
+        let resolved = store::resolve_flow(root, uri)?;
+        if let Some(flow) = graph
+            .flows
+            .iter()
+            .find(|flow| flow.flow_id == resolved.flow_id)
+        {
+            if !focus_flows
+                .iter()
+                .any(|existing: &ContextFlow| existing.flow_id == flow.flow_id)
+            {
+                focus_flows.push(flow.clone());
+            }
+            related_tests.records.extend(flow.related_tests.clone());
+        } else {
+            omissions.push(format!("focus flow unavailable for {uri}"));
+        }
+        focus_flow_refs.push(resolved);
+    }
+    let focus_node_ids = focus_nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<BTreeSet<_>>();
+    related_tests.records.extend(
+        graph
+            .related_test_evidence
+            .records
+            .iter()
+            .filter(|record| focus_node_ids.contains(record.target_node_id.as_str()))
+            .cloned(),
+    );
+    related_tests.records.sort_by(|a, b| {
+        a.test_path
+            .cmp(&b.test_path)
+            .then_with(|| a.test_node_id.cmp(&b.test_node_id))
+            .then_with(|| a.target_node_id.cmp(&b.target_node_id))
+            .then_with(|| a.relation.cmp(&b.relation))
+    });
+    related_tests.records.dedup();
+    if related_tests.records.len() > crate::flow::MAX_RELATED_TEST_RECORDS {
+        related_tests
+            .records
+            .truncate(crate::flow::MAX_RELATED_TEST_RECORDS);
+        related_tests.truncated = true;
+        related_tests.status = "truncated".to_string();
+        related_tests.omissions.push(format!(
+            "related-test records capped at {}",
+            crate::flow::MAX_RELATED_TEST_RECORDS
+        ));
+    }
     let mut assertions = store::list_diagnostic_assertions(root, context_id)?;
     let assertion_total = assertions.len();
     if assertion_total > limits.max_assertions {
@@ -515,13 +611,18 @@ pub fn build_packet(
     limitations.push("Assertions retain their declared evidence class and attribution; they are not parser facts.".to_string());
     let packet_truncated = historical.truncated
         || focus_context_refs.len() < context.focus_context_refs.len()
-        || assertions.len() < assertion_total;
+        || focus_flow_refs.len() < context.focus_flow_refs.len()
+        || assertions.len() < assertion_total
+        || related_tests.truncated;
     let mut packet = DiagnosticPacket {
         schema_version: DIAGNOSTIC_PACKET_SCHEMA.to_string(),
         current_graph_basis: current_basis.clone(),
         last_known_good_basis: context.last_known_good_basis.clone(),
         focus_context_refs,
+        focus_flow_refs,
         focus_nodes,
+        focus_flows,
+        related_tests,
         assertions,
         historical,
         context,
@@ -559,6 +660,18 @@ fn trim_packet(packet: &mut DiagnosticPacket, max_bytes: usize) -> Result<(), St
             packet
                 .omissions
                 .push("focus node cards omitted by packet bound".to_string());
+        } else if packet.focus_flows.pop().is_some() {
+            packet
+                .omissions
+                .push("focus flows omitted by packet bound".to_string());
+        } else if packet.related_tests.records.pop().is_some() {
+            packet
+                .omissions
+                .push("related-test evidence omitted by packet bound".to_string());
+        } else if packet.focus_flow_refs.pop().is_some() {
+            packet
+                .omissions
+                .push("focus Flow Refs omitted by packet bound".to_string());
         } else if packet.focus_context_refs.pop().is_some() {
             packet
                 .omissions
@@ -580,13 +693,20 @@ struct CommitRecord {
     summary: String,
 }
 
-type FocusPathSets = (BTreeSet<String>, BTreeSet<String>, Vec<String>);
+type FocusPathSets = (
+    BTreeSet<String>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+    Vec<String>,
+);
 
+#[allow(clippy::too_many_arguments)]
 fn historical_delta_reasons(
     root: &Path,
     commit: &CommitRecord,
     focus_paths: &BTreeSet<String>,
     cone_paths: &BTreeSet<String>,
+    focus_flow_ids: &BTreeSet<String>,
     limits: &DiagnosticLimits,
     cache: &mut BTreeMap<String, HistoricalSnapshot>,
 ) -> Result<(Vec<String>, u32, Vec<String>), String> {
@@ -595,6 +715,62 @@ fn historical_delta_reasons(
     let mut reasons = Vec::new();
     let mut score = 0;
     let mut notes = Vec::new();
+    let current_flows = current
+        .flows
+        .iter()
+        .map(|flow| (flow.flow_id.as_str(), flow.fingerprint.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let parent_flows = parent
+        .flows
+        .iter()
+        .map(|flow| (flow.flow_id.as_str(), flow.fingerprint.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for flow_id in focus_flow_ids {
+        if current_flows.get(flow_id.as_str()) != parent_flows.get(flow_id.as_str()) {
+            reasons.push("focused-flow-changed".to_string());
+            score += 75;
+        }
+        let current_flow = current.flows.iter().find(|flow| flow.flow_id == *flow_id);
+        let parent_flow = parent.flows.iter().find(|flow| flow.flow_id == *flow_id);
+        if current_flow.map(|flow| (&flow.entry_kind, &flow.entry_key))
+            != parent_flow.map(|flow| (&flow.entry_kind, &flow.entry_key))
+        {
+            reasons.push("focused-entry-changed".to_string());
+            score += 60;
+        }
+        let current_related = current_flow
+            .map(|flow| flow.related_tests.clone())
+            .unwrap_or_default();
+        let parent_related = parent_flow
+            .map(|flow| flow.related_tests.clone())
+            .unwrap_or_default();
+        if current_related != parent_related {
+            reasons.push("related-test-structure-changed".to_string());
+            score += 25;
+        }
+    }
+    let focused_entry_changed = focus_flow_ids.iter().any(|flow_id| {
+        let current_flow = current.flows.iter().find(|flow| flow.flow_id == *flow_id);
+        let parent_flow = parent.flows.iter().find(|flow| flow.flow_id == *flow_id);
+        let Some(current_flow) = current_flow else {
+            return parent_flow.is_some();
+        };
+        let current_entry = current.entry_evidence.records.iter().find(|record| {
+            record.kind == current_flow.entry_kind && record.key == current_flow.entry_key
+        });
+        let parent_entry = parent.entry_evidence.records.iter().find(|record| {
+            record.kind == current_flow.entry_kind && record.key == current_flow.entry_key
+        });
+        current_entry != parent_entry
+    });
+    if focused_entry_changed
+        && !reasons
+            .iter()
+            .any(|reason| reason == "focused-entry-changed")
+    {
+        reasons.push("focused-entry-changed".to_string());
+        score += 60;
+    }
     let current_files = current
         .files
         .iter()
@@ -652,6 +828,8 @@ fn historical_delta_reasons(
     for (from, to, _) in changed_edges {
         if current_edges.contains(&(from, to, "calls"))
             != parent_edges.contains(&(from, to, "calls"))
+            || current_edges.contains(&(from, to, "constructs"))
+                != parent_edges.contains(&(from, to, "constructs"))
             || current_edges.contains(&(from, to, "imports"))
                 != parent_edges.contains(&(from, to, "imports"))
         {
@@ -746,7 +924,10 @@ fn build_historical_snapshot(
     let mut truncated = false;
     let mut omissions = Vec::new();
     let mut included = 0_usize;
-    for path in paths.iter().filter(|path| is_typescript_path(path)) {
+    for path in paths
+        .iter()
+        .filter(|path| is_typescript_path(path) || *path == "package.json")
+    {
         if included >= limits.max_paths {
             truncated = true;
             omissions.push(format!(
@@ -836,6 +1017,13 @@ fn build_historical_snapshot(
     let _ = fs::remove_dir_all(&temporary);
     let (mut graph_snapshot, _) = built?;
     graph_snapshot.project_id = crate::graph::project_id(root);
+    for flow in &mut graph_snapshot.flows {
+        flow.flow_id = crate::flow::flow_id(
+            &graph_snapshot.project_id,
+            &flow.entry_kind,
+            &flow.entry_key,
+        );
+    }
     graph_snapshot.source_revision = revision.to_string();
     graph_snapshot.observation_id.clear();
     graph_snapshot.graph_version = 0;
@@ -850,6 +1038,9 @@ fn build_historical_snapshot(
         edges: graph_snapshot.edges,
         resolution_evidence: graph_snapshot.resolution_evidence,
         module_resolution: graph_snapshot.module_resolution,
+        entry_evidence: graph_snapshot.entry_evidence,
+        related_test_evidence: graph_snapshot.related_test_evidence,
+        flows: graph_snapshot.flows,
         truncated: graph_snapshot.truncated,
         omissions: graph_snapshot.omissions,
     })
@@ -931,6 +1122,7 @@ fn focus_paths(
     limits: &DiagnosticLimits,
 ) -> Result<FocusPathSets, String> {
     let mut focus = BTreeSet::new();
+    let mut focus_flow_ids = BTreeSet::new();
     let mut limitations = Vec::new();
     let mut starts = Vec::new();
     for uri in context
@@ -964,6 +1156,39 @@ fn focus_paths(
             limits.max_context_refs
         ));
     }
+    for uri in context.focus_flow_refs.iter().take(limits.max_context_refs) {
+        let resolved = store::resolve_flow(root, uri)?;
+        focus_flow_ids.insert(resolved.flow_id.clone());
+        if resolved.status != "current" {
+            limitations.push(format!("focus Flow Ref {uri} is {}.", resolved.status));
+        }
+        if let Some(flow) = graph_snapshot
+            .flows
+            .iter()
+            .find(|flow| flow.flow_id == resolved.flow_id)
+        {
+            starts.push(flow.entry_node_id.clone());
+            for step in &flow.steps {
+                starts.push(step.node_id.clone());
+                if let Some(path) = &step.path
+                    && path != "package.json"
+                {
+                    focus.insert(path.clone());
+                }
+            }
+        } else {
+            limitations.push(format!(
+                "focus flow {} is unavailable in the current graph.",
+                resolved.flow_id
+            ));
+        }
+    }
+    if context.focus_flow_refs.len() > limits.max_context_refs {
+        limitations.push(format!(
+            "focus Flow Refs capped at {}.",
+            limits.max_context_refs
+        ));
+    }
     let mut cone = focus.clone();
     let mut queue = starts.into_iter().collect::<VecDeque<_>>();
     let mut visited = BTreeSet::new();
@@ -994,7 +1219,7 @@ fn focus_paths(
             }
         }
     }
-    Ok((focus, cone, limitations))
+    Ok((focus, cone, focus_flow_ids, limitations))
 }
 
 pub(crate) fn validate_basis(basis: &GraphBasis) -> Result<(), String> {
@@ -1062,16 +1287,6 @@ fn validate_revision(value: &str) -> Result<(), String> {
 
 fn is_typescript_path(path: &str) -> bool {
     path.ends_with(".ts") || path.ends_with(".tsx")
-}
-
-fn is_test_path(path: &str) -> bool {
-    path.ends_with(".test.ts")
-        || path.ends_with(".test.tsx")
-        || path.ends_with(".spec.ts")
-        || path.ends_with(".spec.tsx")
-        || path
-            .split('/')
-            .any(|part| part == "test" || part == "tests" || part == "__tests__")
 }
 
 fn current_head(root: &Path) -> Result<String, String> {
@@ -1335,6 +1550,7 @@ mod tests {
             symptom: "checkout intermittently times out".to_string(),
             expected_behavior: "checkout completes once within the configured timeout".to_string(),
             focus_context_refs: vec![payment_ref.clone()],
+            focus_flow_refs: Vec::new(),
             current_graph_basis: crate::diagnostic::graph_basis(&result.graph),
             last_known_good_basis: Some(GitBasis { revision: lkg }),
             constraints: vec!["Static evidence only".to_string()],

@@ -4,6 +4,8 @@ pub mod context;
 pub mod contract;
 pub mod diagnostic;
 pub mod discovery;
+pub mod flow;
+pub mod flow_ref;
 pub mod graph;
 pub mod history_store;
 pub mod model;

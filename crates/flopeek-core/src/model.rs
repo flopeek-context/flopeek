@@ -7,19 +7,23 @@
 use serde::{Deserialize, Serialize};
 
 pub const PRODUCT_IDENTITY: &str = "flopeek-repository-memory";
-pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v1";
-pub const GRAPH_SCHEMA: &str = "flopeek-graph/v5";
+pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v2";
+pub const GRAPH_SCHEMA: &str = "flopeek-graph/v6";
 pub const CONTEXT_REF_SCHEMA: &str = "flopeek-context-ref/v2";
-pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v5";
-pub const STORE_SCHEMA: &str = "flopeek-sqlite/v3";
+pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v6";
+pub const STORE_SCHEMA: &str = "flopeek-sqlite/v4";
 pub const TYPESCRIPT_FACTS_SCHEMA: &str = "flopeek-typescript-facts/v4";
 pub const TYPESCRIPT_RESOLUTION_SCHEMA: &str = "flopeek-typescript-resolution/v3";
-pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v2";
+pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v3";
 pub const DIAGNOSTIC_ASSERTION_SCHEMA: &str = "flopeek-diagnostic-assertion/v2";
 pub const HISTORICAL_CANDIDATE_SCHEMA: &str = "flopeek-historical-candidate/v2";
 pub const HISTORICAL_DIAGNOSIS_SCHEMA: &str = "flopeek-historical-diagnosis/v1";
-pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v2";
-pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v5";
+pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v3";
+pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v6";
+pub const ENTRY_EVIDENCE_SCHEMA: &str = "flopeek-entry-evidence/v1";
+pub const CONTEXT_FLOW_SCHEMA: &str = "flopeek-context-flow/v1";
+pub const RELATED_TEST_EVIDENCE_SCHEMA: &str = "flopeek-related-test-evidence/v1";
+pub const FLOW_REF_SCHEMA: &str = "flopeek-flow-ref/v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -180,6 +184,168 @@ pub struct ModuleResolutionBasis {
     pub omissions: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryManifest {
+    pub path: String,
+    pub bytes: u64,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryRecord {
+    pub key: String,
+    pub kind: String,
+    pub runner: Option<String>,
+    pub target_path: Option<String>,
+    pub target_node_id: Option<String>,
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryEvidence {
+    pub schema_version: String,
+    pub status: String,
+    pub manifest: Option<EntryManifest>,
+    pub exact_fingerprint: String,
+    pub effective_fingerprint: String,
+    pub records: Vec<EntryRecord>,
+    pub truncated: bool,
+    pub omissions: Vec<String>,
+    pub limitations: Vec<String>,
+}
+
+impl Default for EntryEvidence {
+    fn default() -> Self {
+        Self {
+            schema_version: ENTRY_EVIDENCE_SCHEMA.to_string(),
+            status: "unavailable".to_string(),
+            manifest: None,
+            exact_fingerprint: String::new(),
+            effective_fingerprint: String::new(),
+            records: Vec::new(),
+            truncated: false,
+            omissions: vec!["legacy-entry-basis-unavailable".to_string()],
+            limitations: vec!["entry-manifest-evidence-unavailable".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedTestRecord {
+    pub test_path: String,
+    pub test_node_id: String,
+    pub target_node_id: String,
+    pub relation: String,
+    pub strength: String,
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedTestEvidence {
+    pub schema_version: String,
+    pub status: String,
+    pub records: Vec<RelatedTestRecord>,
+    pub truncated: bool,
+    pub omissions: Vec<String>,
+}
+
+fn is_default_entry_evidence(value: &EntryEvidence) -> bool {
+    value.status == "unavailable"
+        && value.manifest.is_none()
+        && value.records.is_empty()
+        && value.exact_fingerprint.is_empty()
+        && value.effective_fingerprint.is_empty()
+}
+
+fn is_default_related_test_evidence(value: &RelatedTestEvidence) -> bool {
+    value.status == "unavailable" && value.records.is_empty()
+}
+
+impl Default for RelatedTestEvidence {
+    fn default() -> Self {
+        Self {
+            schema_version: RELATED_TEST_EVIDENCE_SCHEMA.to_string(),
+            status: "unavailable".to_string(),
+            records: Vec::new(),
+            truncated: false,
+            omissions: vec!["related-test-evidence-unavailable".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowStep {
+    pub index: usize,
+    pub node_id: String,
+    pub path: Option<String>,
+    pub name: Option<String>,
+    pub role: String,
+    pub evidence_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowEdge {
+    pub from: String,
+    pub to: String,
+    pub kind: String,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextFlow {
+    pub schema_version: String,
+    pub flow_id: String,
+    pub entry_node_id: String,
+    pub entry_kind: String,
+    pub entry_key: String,
+    pub steps: Vec<FlowStep>,
+    pub traversed_edges: Vec<FlowEdge>,
+    pub related_tests: Vec<RelatedTestRecord>,
+    pub fingerprint: String,
+    pub status: String,
+    pub truncated: bool,
+    pub omissions: Vec<String>,
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowRef {
+    pub schema_version: String,
+    pub uri: String,
+    pub project_id: String,
+    pub graph_id: String,
+    pub graph_version: u64,
+    pub flow_id: String,
+    pub status: String,
+    pub origin_observation_id: String,
+    pub origin_source_revision: String,
+    pub origin_fingerprint: String,
+    pub fingerprint_scope: String,
+    pub freshness_reason: String,
+    pub origin_basis: Option<GraphBasis>,
+    pub current_basis: Option<GraphBasis>,
+}
+
 impl Default for ModuleResolutionBasis {
     fn default() -> Self {
         Self {
@@ -249,6 +415,12 @@ pub struct GraphSnapshot {
     pub resolution_evidence: ResolutionEvidence,
     #[serde(default)]
     pub module_resolution: ModuleResolutionBasis,
+    #[serde(default)]
+    pub entry_evidence: EntryEvidence,
+    #[serde(default)]
+    pub related_test_evidence: RelatedTestEvidence,
+    #[serde(default)]
+    pub flows: Vec<ContextFlow>,
     pub truncated: bool,
     pub omissions: Vec<String>,
 }
@@ -299,6 +471,8 @@ pub struct ScanResult {
     pub project_id: String,
     pub graph: GraphSnapshot,
     pub context_refs: Vec<ContextRef>,
+    #[serde(default)]
+    pub flow_refs: Vec<FlowRef>,
     pub limitations: Vec<String>,
 }
 
@@ -358,6 +532,14 @@ pub struct GraphObservation {
     pub module_resolution_effective_fingerprint: String,
     #[serde(default)]
     pub module_resolution_manifest: Vec<ModuleResolutionConfigFile>,
+    #[serde(default)]
+    pub entry_manifest_status: String,
+    #[serde(default)]
+    pub entry_manifest_fingerprint: String,
+    #[serde(default)]
+    pub entry_effective_fingerprint: String,
+    #[serde(default)]
+    pub entry_manifest: Option<EntryManifest>,
     pub observed_at: u64,
 }
 
@@ -380,6 +562,8 @@ pub struct DiagnosticContext {
     pub symptom: String,
     pub expected_behavior: String,
     pub focus_context_refs: Vec<String>,
+    #[serde(default)]
+    pub focus_flow_refs: Vec<String>,
     pub current_graph_basis: GraphBasis,
     pub last_known_good_basis: Option<GitBasis>,
     pub constraints: Vec<String>,
@@ -451,6 +635,12 @@ pub struct HistoricalSnapshot {
     pub resolution_evidence: ResolutionEvidence,
     #[serde(default)]
     pub module_resolution: ModuleResolutionBasis,
+    #[serde(default, skip_serializing_if = "is_default_entry_evidence")]
+    pub entry_evidence: EntryEvidence,
+    #[serde(default, skip_serializing_if = "is_default_related_test_evidence")]
+    pub related_test_evidence: RelatedTestEvidence,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flows: Vec<ContextFlow>,
     pub truncated: bool,
     pub omissions: Vec<String>,
 }
@@ -480,7 +670,13 @@ pub struct DiagnosticPacket {
     pub current_graph_basis: GraphBasis,
     pub last_known_good_basis: Option<GitBasis>,
     pub focus_context_refs: Vec<ContextRef>,
+    #[serde(default)]
+    pub focus_flow_refs: Vec<FlowRef>,
     pub focus_nodes: Vec<GraphNode>,
+    #[serde(default)]
+    pub focus_flows: Vec<ContextFlow>,
+    #[serde(default)]
+    pub related_tests: RelatedTestEvidence,
     pub assertions: Vec<DiagnosticAssertion>,
     pub historical: HistoricalDiagnosis,
     pub limitations: Vec<String>,

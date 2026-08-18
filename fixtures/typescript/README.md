@@ -14,3 +14,8 @@ diagnosis contract without requiring a model or runtime execution.
 
 The history manifest describes relevance as a deterministic candidate signal. It
 does not label any change as a cause or root cause.
+
+`flows/` adds a bounded root `package.json` with supported and unsupported entry
+forms, direct imports, a constructor, static call edges, cycle-safe traversal,
+and a related TypeScript test. It exercises entry evidence, Flow Ref freshness,
+deterministic static BFS ordering, and related-test false-positive controls.
