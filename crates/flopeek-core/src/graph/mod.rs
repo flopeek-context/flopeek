@@ -247,19 +247,17 @@ fn assign_node_fingerprints(
                 .path
                 .as_deref()
                 .and_then(|path| facts.iter().find(|fact| fact.path == path))
-                .and_then(|fact| {
-                    Some(
-                        fact.declarations
-                            .iter()
-                            .filter(|declaration| {
-                                declaration.name == node.name.as_deref().unwrap_or_default()
-                                    && normalize_symbol_kind(&declaration.kind) == node.kind
-                            })
-                            .map(|declaration| {
-                                format!("{}:{}", declaration.ast_fingerprint, declaration.exported)
-                            })
-                            .collect::<Vec<_>>(),
-                    )
+                .map(|fact| {
+                    fact.declarations
+                        .iter()
+                        .filter(|declaration| {
+                            declaration.name == node.name.as_deref().unwrap_or_default()
+                                && normalize_symbol_kind(&declaration.kind) == node.kind
+                        })
+                        .map(|declaration| {
+                            format!("{}:{}", declaration.ast_fingerprint, declaration.exported)
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
             declaration_fingerprints.sort();
