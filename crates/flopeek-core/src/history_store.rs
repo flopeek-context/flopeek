@@ -197,6 +197,7 @@ mod tests {
             files: Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
+            resolution_evidence: crate::model::ResolutionEvidence::default(),
             truncated: false,
             omissions: Vec::new(),
         };
@@ -236,6 +237,18 @@ mod tests {
             )
             .expect("load exact parser namespace")
             .is_some()
+        );
+        assert!(
+            load_with_key(
+                &root,
+                &snapshot.source_revision,
+                crate::graph::GRAPH_DERIVATION_ID,
+                crate::typescript::PARSER_IDENTITY,
+                10,
+                1024,
+            )
+            .expect("reject prior derivation namespace")
+            .is_none()
         );
         fs::remove_dir_all(&root).expect("cleanup test root");
     }

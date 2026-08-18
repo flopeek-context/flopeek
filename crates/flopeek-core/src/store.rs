@@ -923,23 +923,39 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
     else {
         return Ok(None);
     };
-    let mut files = connection
+    let mut facts = Vec::new();
+    let mut legacy_facts = false;
+    let files = connection
         .prepare(
-            "SELECT path, language, bytes, hash FROM source_files
+            "SELECT path, language, bytes, hash, facts_json FROM source_files
              WHERE graph_version = ?1 ORDER BY path",
         )
         .map_err(|error| format!("Unable to prepare source query: {error}"))?
         .query_map(params![graph_version], |row| {
-            Ok(SourceFile {
-                path: row.get(0)?,
-                language: row.get(1)?,
-                bytes: row.get::<_, i64>(2)? as u64,
-                hash: row.get(3)?,
-            })
+            Ok((
+                SourceFile {
+                    path: row.get(0)?,
+                    language: row.get(1)?,
+                    bytes: row.get::<_, i64>(2)? as u64,
+                    hash: row.get(3)?,
+                },
+                row.get::<_, String>(4)?,
+            ))
         })
         .map_err(|error| format!("Unable to query source evidence: {error}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("Unable to decode source evidence: {error}"))?;
+    let mut files = files
+        .into_iter()
+        .map(|(file, facts_json)| {
+            let fact = serde_json::from_str::<TypeScriptFacts>(&facts_json)
+                .map_err(|error| format!("Unable to decode TypeScript facts: {error}"))?;
+            legacy_facts |= fact.schema_version != crate::model::TYPESCRIPT_FACTS_SCHEMA
+                || fact.parser != crate::typescript::PARSER_IDENTITY;
+            facts.push(fact);
+            Ok(file)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let mut nodes = connection
         .prepare(
             "SELECT node_id, kind, path, name, language, evidence_fingerprint FROM graph_nodes
@@ -981,6 +997,7 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
     edges.shrink_to_fit();
     let omissions = serde_json::from_str::<Vec<String>>(&omissions_json)
         .map_err(|error| format!("Unable to decode graph omissions: {error}"))?;
+    let resolution_evidence = crate::graph::resolution_evidence(&facts, legacy_facts);
     Ok(Some(GraphSnapshot {
         schema_version: crate::model::GRAPH_SCHEMA.to_string(),
         product: PRODUCT_IDENTITY.to_string(),
@@ -993,6 +1010,7 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         files,
         nodes,
         edges,
+        resolution_evidence,
         truncated: truncated != 0,
         omissions,
     }))
@@ -1440,6 +1458,68 @@ mod tests {
     }
 
     #[test]
+    fn direct_import_target_change_stales_caller_and_target_refs() {
+        let root = fixture_root();
+        fs::write(
+            root.join("src/target.ts"),
+            "export function target() { return 1; }\n",
+        )
+        .expect("target");
+        fs::write(
+            root.join("src/caller.ts"),
+            "import { target } from './target'; export function run() { target(); }\n",
+        )
+        .expect("caller");
+        let (snapshot, facts) = graph::build(&root).expect("build initial");
+        let first = persist_scan(&root, snapshot, &facts).expect("persist initial");
+        let caller_ref = first
+            .context_refs
+            .iter()
+            .find(|candidate| {
+                first.graph.nodes.iter().any(|node| {
+                    node.id == candidate.node_id
+                        && node.path.as_deref() == Some("src/caller.ts")
+                        && node.name.as_deref() == Some("run")
+                })
+            })
+            .expect("caller ref")
+            .uri
+            .clone();
+        let target_ref = first
+            .context_refs
+            .iter()
+            .find(|candidate| {
+                first.graph.nodes.iter().any(|node| {
+                    node.id == candidate.node_id
+                        && node.path.as_deref() == Some("src/target.ts")
+                        && node.name.as_deref() == Some("target")
+                })
+            })
+            .expect("target ref")
+            .uri
+            .clone();
+        fs::write(
+            root.join("src/other.ts"),
+            "export function other() { return 2; }\n",
+        )
+        .expect("other");
+        fs::write(
+            root.join("src/caller.ts"),
+            "import { other } from './other'; export function run() { other(); }\n",
+        )
+        .expect("changed caller");
+        let (snapshot, facts) = graph::build(&root).expect("build changed");
+        persist_scan(&root, snapshot, &facts).expect("persist changed");
+        let caller = resolve_context(&root, &caller_ref).expect("resolve caller");
+        let target = resolve_context(&root, &target_ref).expect("resolve target");
+        assert_eq!(caller.status, "stale");
+        assert_eq!(target.status, "stale");
+        assert!(caller.freshness_reason.contains("fingerprint"));
+        assert!(target.freshness_reason.contains("fingerprint"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn identical_structure_across_revision_gets_new_observation_and_reuses_graph_version() {
         let root = fixture_root();
         git(&root, &["init"]);
@@ -1622,6 +1702,44 @@ mod tests {
                 .expect("resolve legacy current")
                 .status,
             "current"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn legacy_v4_facts_are_readable_but_resolution_evidence_is_unavailable() {
+        let root = fixture_root();
+        let (snapshot, facts) = graph::build(&root).expect("build");
+        persist_scan(&root, snapshot, &facts).expect("persist");
+        let connection = open(&root).expect("open");
+        let facts_json = connection
+            .query_row("SELECT facts_json FROM source_files LIMIT 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .expect("facts");
+        let mut legacy: serde_json::Value = serde_json::from_str(&facts_json).expect("json");
+        let object = legacy.as_object_mut().expect("facts object");
+        object.remove("schema_version");
+        object.remove("resolution_records");
+        connection
+            .execute(
+                "UPDATE source_files SET facts_json = ?1",
+                params![serde_json::to_string(&legacy).expect("legacy facts")],
+            )
+            .expect("write legacy facts");
+        drop(connection);
+
+        let current = current_graph(&root)
+            .expect("read legacy graph")
+            .expect("current graph");
+        assert_eq!(current.schema_version, crate::model::GRAPH_SCHEMA);
+        assert_eq!(current.resolution_evidence.status, "unavailable");
+        assert!(
+            current
+                .resolution_evidence
+                .omissions
+                .iter()
+                .any(|omission| omission == "legacy-facts-without-resolution-evidence")
         );
         fs::remove_dir_all(root).expect("cleanup");
     }
