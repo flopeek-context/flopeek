@@ -149,7 +149,7 @@
     "cytoscape-dagre": "^4.0.0",
     "php-parser": "^3.7.0",
     "svelte": "^5.56.4",
-    "tree-sitter": "^0.21.1",
+    "tree-sitter": "^0.25.1",
     "tree-sitter-java": "^0.23.5",
     "tree-sitter-rust": "^0.21.0",
     "typescript": "^5.9.3",
