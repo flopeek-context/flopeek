@@ -362,8 +362,12 @@ fn migration_v4(transaction: &Transaction<'_>) -> Result<(), String> {
             .strip_suffix("+dirty")
             .unwrap_or(&source_revision)
             .to_string();
-        let observation_id =
-            observation_id(&project_id, &source_revision, &source_fingerprint, &graph_id);
+        let observation_id = observation_id(
+            &project_id,
+            &source_revision,
+            &source_fingerprint,
+            &graph_id,
+        );
         transaction
             .execute(
                 "INSERT OR IGNORE INTO graph_observations(

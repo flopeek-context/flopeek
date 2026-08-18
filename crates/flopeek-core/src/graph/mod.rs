@@ -256,10 +256,7 @@ fn assign_node_fingerprints(
                                     && normalize_symbol_kind(&declaration.kind) == node.kind
                             })
                             .map(|declaration| {
-                                format!(
-                                    "{}:{}",
-                                    declaration.ast_fingerprint, declaration.exported
-                                )
+                                format!("{}:{}", declaration.ast_fingerprint, declaration.exported)
                             })
                             .collect::<Vec<_>>(),
                     )
