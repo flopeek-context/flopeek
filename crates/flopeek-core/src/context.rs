@@ -133,24 +133,28 @@ pub fn resolve(
 
     let origin_basis = connection
         .query_row(
-            "SELECT git_revision FROM graph_observations
+            "SELECT git_revision, dirty FROM graph_observations
              WHERE observation_id = ?1 AND project_id = ?2",
             params![origin_observation_id, stored_project],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )
         .optional()
         .map_err(|error| format!("Unable to read Context Ref origin observation: {error}"))?
-        .map(|revision| GraphBasis {
+        .map(|(revision, dirty)| GraphBasis {
             project_id: stored_project.clone(),
             graph_id: graph_id.clone(),
             graph_version: graph_version as u64,
-            source_revision: revision,
+            source_revision: if dirty != 0 {
+                format!("{revision}+dirty")
+            } else {
+                revision
+            },
             observation_id: origin_observation_id.clone(),
         });
     let current = connection
         .query_row(
             "SELECT observation.observation_id, observation.git_revision,
-                    observation.graph_version, graph.graph_id
+                    observation.dirty, observation.graph_version, graph.graph_id
              FROM project_state state
              JOIN graph_observations observation ON observation.observation_id = state.current_observation_id
              JOIN graph_versions graph ON graph.graph_version = observation.graph_version
@@ -161,19 +165,30 @@ pub fn resolve(
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
         .optional()
         .map_err(|error| format!("Unable to read current graph observation: {error}"))?;
     let (status, freshness_reason, current_basis) = match current {
-        Some((current_observation_id, current_revision, current_version, current_graph_id)) => {
+        Some((
+            current_observation_id,
+            current_revision,
+            current_dirty,
+            current_version,
+            current_graph_id,
+        )) => {
             let current_basis = Some(GraphBasis {
                 project_id: project_id.to_string(),
                 graph_id: current_graph_id,
                 graph_version: current_version as u64,
-                source_revision: current_revision,
+                source_revision: if current_dirty != 0 {
+                    format!("{current_revision}+dirty")
+                } else {
+                    current_revision
+                },
                 observation_id: current_observation_id,
             });
             let current_evidence = connection
