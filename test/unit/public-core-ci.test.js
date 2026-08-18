@@ -24,7 +24,7 @@ test("authoritative CI is one Rust and TypeScript/TSX lane without legacy langua
   assert.match(workflow, /uses: actions\/checkout@[a-f0-9]{40}/);
   assert.match(workflow, /uses: actions\/setup-node@[a-f0-9]{40}[\s\S]*node-version: 22/);
   assert.match(workflow, /uses: dtolnay\/rust-toolchain@[a-f0-9]{40}[^\n]*[\s\S]*?toolchain:\s*\$\{\{ steps\.rust-toolchain\.outputs\.channel \}\}/);
-  for (const command of ["cargo fmt --check --manifest-path native/flopeek-core/Cargo.toml", "cargo clippy --locked --manifest-path native/flopeek-core/Cargo.toml -- -D warnings", "cargo test --locked --manifest-path native/flopeek-core/Cargo.toml js_facts::tests::", "npm run test:rust-ts-authority", "npm run test:contracts", "npm run check:docs", "npm run check:document-contracts", "npm run audit:package", "npm run verify:import-safety", "node scripts/verify-branch-name.js"]) {
+  for (const command of ["cargo fmt --check --manifest-path native/flopeek-core/Cargo.toml", "cargo clippy --locked --manifest-path native/flopeek-core/Cargo.toml -- -D warnings", "cargo test --locked --manifest-path native/flopeek-core/Cargo.toml 'js_facts::tests::'", "npm run test:rust-ts-authority", "npm run test:contracts", "npm run check:docs", "npm run check:document-contracts", "npm run audit:package", "npm run verify:import-safety", "node scripts/verify-branch-name.js"]) {
     assert.match(workflow, new RegExp(`- run: ${command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   }
   assert.equal((workflow.match(/cargo fmt --check --manifest-path/g) || []).length, 1);
