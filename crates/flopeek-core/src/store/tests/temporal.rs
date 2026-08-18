@@ -46,6 +46,210 @@ fn observation_continuity_is_idempotent_and_preserves_a_b_a_order() {
 }
 
 #[test]
+fn observation_delta_reports_adjacent_changes_and_zero_bounds() {
+    let root = fixture_root();
+    let (snapshot, facts) = graph::build(&root).expect("build A");
+    let first = persist_scan(&root, snapshot, &facts).expect("persist A");
+    let root_event = get_observation_continuity(&root, 128)
+        .expect("continuity A")
+        .current_event_id
+        .expect("root event");
+    let unavailable = get_observation_delta(
+        &root,
+        Some(&root_event),
+        crate::temporal::DeltaLimits::default(),
+    )
+    .expect("root delta");
+    assert_eq!(unavailable.status, "unavailable");
+    assert_eq!(unavailable.reason, "predecessor-event-unavailable");
+    assert_eq!(
+        unavailable
+            .to_basis
+            .as_ref()
+            .map(|basis| basis.observation_id.as_str()),
+        Some(first.graph.observation_id.as_str())
+    );
+
+    fs::write(root.join("src/main.ts"), "export const main = 2;\n").expect("write B");
+    let (snapshot, facts) = graph::build(&root).expect("build B");
+    persist_scan(&root, snapshot, &facts).expect("persist B");
+    let delta = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+        .expect("delta B");
+    assert_eq!(delta.status, "complete");
+    assert_eq!(delta.graph_relation, "structural-graph-changed");
+    assert_eq!(delta.relation, "observed-after");
+    assert!(delta.counts.source_changed >= 1);
+    assert!(delta.counts.node_changed >= 1);
+    assert!(
+        delta
+            .node_changes
+            .iter()
+            .any(|change| change.status == "changed")
+    );
+
+    let zero = get_observation_delta(
+        &root,
+        None,
+        crate::temporal::DeltaLimits {
+            max_source_changes: 0,
+            max_node_changes: 0,
+            max_edge_changes: 0,
+            max_flow_changes: 0,
+        },
+    )
+    .expect("zero-bound delta");
+    assert_eq!(zero.status, "truncated");
+    assert!(zero.truncated);
+    assert_eq!(zero.source_changes.len(), 0);
+    assert!(zero.counts.source_changed >= 1);
+    assert!(
+        zero.omissions
+            .iter()
+            .any(|omission| omission.contains("source changes"))
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn observation_delta_preserves_same_graph_and_a_b_a_adjacency() {
+    let root = fixture_root();
+    git(&root, &["init"]);
+    git(
+        &root,
+        &["config", "user.email", "flopeek-test@example.invalid"],
+    );
+    git(&root, &["config", "user.name", "Flopeek Test"]);
+    git(&root, &["add", "src/main.ts"]);
+    git(&root, &["commit", "-m", "source A"]);
+    let (snapshot, facts) = graph::build(&root).expect("build A");
+    let first = persist_scan(&root, snapshot, &facts).expect("persist A");
+    fs::write(root.join("README.md"), "documentation-only\n").expect("README");
+    git(&root, &["add", "README.md"]);
+    git(&root, &["commit", "-m", "README only"]);
+    let (snapshot, facts) = graph::build(&root).expect("build README");
+    let second = persist_scan(&root, snapshot, &facts).expect("persist README");
+    assert_eq!(first.graph.graph_id, second.graph.graph_id);
+    let same = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+        .expect("same graph delta");
+    assert_eq!(same.status, "complete");
+    assert_eq!(same.reason, "same-structural-graph");
+    assert_eq!(same.graph_relation, "same-structural-graph");
+    assert_eq!(same.counts, crate::model::ObservationDeltaCounts::default());
+
+    fs::write(root.join("src/main.ts"), "export const main = 3;\n").expect("write B");
+    let (snapshot, facts) = graph::build(&root).expect("build B");
+    let third = persist_scan(&root, snapshot, &facts).expect("persist B");
+    fs::write(root.join("src/main.ts"), "export const main = 1;").expect("write A");
+    let (snapshot, facts) = graph::build(&root).expect("build A again");
+    let fourth = persist_scan(&root, snapshot, &facts).expect("persist A again");
+    let continuity = get_observation_continuity(&root, 128).expect("continuity");
+    assert_eq!(continuity.events.len(), 4);
+    let delta = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+        .expect("A delta");
+    assert_eq!(
+        delta.from_event_id,
+        Some(continuity.events[2].event_id.clone())
+    );
+    assert_eq!(
+        delta.to_event_id,
+        Some(continuity.events[3].event_id.clone())
+    );
+    assert_eq!(
+        delta.to_basis.as_ref().map(|basis| basis.graph_version),
+        Some(fourth.graph.graph_version)
+    );
+    assert_ne!(third.graph.graph_id, fourth.graph.graph_id);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn observation_delta_rejects_legacy_contracts_and_wrong_project_events() {
+    let root = fixture_root();
+    let (snapshot, facts) = graph::build(&root).expect("build A");
+    persist_scan(&root, snapshot, &facts).expect("persist A");
+    fs::write(root.join("src/main.ts"), "export const main = 2;\n").expect("write B");
+    let (snapshot, facts) = graph::build(&root).expect("build B");
+    persist_scan(&root, snapshot, &facts).expect("persist B");
+    let connection = open(&root).expect("open");
+    connection
+        .execute(
+            "UPDATE graph_versions
+             SET graph_derivation_id = ?1
+             WHERE graph_version = (SELECT MIN(graph_version) FROM graph_versions)",
+            params![crate::temporal::LEGACY_EVIDENCE_CONTRACT],
+        )
+        .expect("legacy graph contract");
+    drop(connection);
+    let unavailable = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+        .expect("legacy delta");
+    assert_eq!(unavailable.status, "unavailable");
+    assert_eq!(unavailable.reason, "incompatible-evidence-contract");
+    assert!(unavailable.node_changes.is_empty());
+
+    let connection = open(&root).expect("reopen");
+    let observation_id = connection
+        .query_row(
+            "SELECT observation_id FROM graph_observations ORDER BY observed_at LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("observation");
+    connection
+        .execute(
+            "INSERT INTO observation_events(
+                event_id, project_id, observation_id, predecessor_event_id, observed_at
+             ) VALUES('foreign-event', 'foreign-project', ?1, NULL, 1)",
+            params![observation_id],
+        )
+        .expect("foreign event");
+    drop(connection);
+    let wrong_project = get_observation_delta(
+        &root,
+        Some("foreign-event"),
+        crate::temporal::DeltaLimits::default(),
+    )
+    .expect("wrong project delta");
+    assert_eq!(wrong_project.status, "wrong-project");
+    assert_eq!(wrong_project.reason, "wrong-project-event");
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn observation_delta_reports_corrupt_contract_metadata_explicitly() {
+    let root = fixture_root();
+    git(&root, &["init"]);
+    git(
+        &root,
+        &["config", "user.email", "flopeek-test@example.invalid"],
+    );
+    git(&root, &["config", "user.name", "Flopeek Test"]);
+    git(&root, &["add", "src/main.ts"]);
+    git(&root, &["commit", "-m", "source A"]);
+    let (snapshot, facts) = graph::build(&root).expect("build A");
+    persist_scan(&root, snapshot, &facts).expect("persist A");
+    fs::write(root.join("README.md"), "documentation-only\n").expect("README");
+    git(&root, &["add", "README.md"]);
+    git(&root, &["commit", "-m", "README only"]);
+    let (snapshot, facts) = graph::build(&root).expect("build README");
+    persist_scan(&root, snapshot, &facts).expect("persist README");
+    let connection = open(&root).expect("open");
+    connection
+        .execute(
+            "UPDATE graph_versions SET graph_schema_version = ''
+             WHERE graph_version = (SELECT MAX(graph_version) FROM graph_versions)",
+            [],
+        )
+        .expect("corrupt contract");
+    drop(connection);
+    let delta = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+        .expect("corrupt delta");
+    assert_eq!(delta.status, "unavailable");
+    assert_eq!(delta.reason, "evidence-contract-unavailable");
+    assert_eq!(delta.graph_relation, "unavailable");
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
 fn moved_exact_node_is_superseded_and_ambiguous_successors_stay_stale() {
     let root = fixture_root();
     let (snapshot, facts) = graph::build(&root).expect("build origin");
@@ -128,7 +332,7 @@ fn continuity_bounds_and_missing_history_are_explicit() {
 }
 
 #[test]
-fn fresh_and_upgraded_v7_schema_match_and_migration_failure_rolls_back() {
+fn fresh_and_upgraded_v8_schema_match_and_migration_failure_rolls_back() {
     let fresh_root = fixture_root();
     let fresh = open(&fresh_root).expect("fresh schema");
     let fresh_schema = schema_snapshot(&fresh);
@@ -141,9 +345,9 @@ fn fresh_and_upgraded_v7_schema_match_and_migration_failure_rolls_back() {
     drop(fresh);
 
     let upgraded_root = fixture_root();
-    initialize_v6_database(&upgraded_root);
+    initialize_v7_database(&upgraded_root);
     let project_id = graph::project_id(&upgraded_root);
-    let connection = rusqlite::Connection::open(database_path(&upgraded_root)).expect("v6");
+    let connection = rusqlite::Connection::open(database_path(&upgraded_root)).expect("v7");
     connection
         .execute(
             "INSERT INTO graph_versions(graph_version, graph_id, project_id, source_revision, created_at, truncated, omissions_json)
@@ -174,6 +378,23 @@ fn fresh_and_upgraded_v7_schema_match_and_migration_failure_rolls_back() {
             .expect("upgraded version"),
         CURRENT_USER_VERSION
     );
+    let contract = upgraded
+        .query_row(
+            "SELECT graph_schema_version, graph_derivation_id, node_fingerprint_contract
+             FROM graph_versions WHERE graph_version = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .expect("legacy contract");
+    assert_eq!(contract.0, crate::temporal::LEGACY_EVIDENCE_CONTRACT);
+    assert_eq!(contract.1, crate::temporal::LEGACY_EVIDENCE_CONTRACT);
+    assert_eq!(contract.2, crate::temporal::LEGACY_EVIDENCE_CONTRACT);
     let migrated_context = upgraded
         .query_row(
             "SELECT payload_json FROM diagnostic_contexts WHERE id='context-v6'",
@@ -197,9 +418,9 @@ fn fresh_and_upgraded_v7_schema_match_and_migration_failure_rolls_back() {
     fs::remove_dir_all(upgraded_root).expect("cleanup upgraded");
 
     let failed_root = fixture_root();
-    initialize_v6_database(&failed_root);
+    initialize_v7_database(&failed_root);
     let project_id = graph::project_id(&failed_root);
-    let connection = rusqlite::Connection::open(database_path(&failed_root)).expect("failed v6");
+    let connection = rusqlite::Connection::open(database_path(&failed_root)).expect("failed v7");
     connection
         .execute(
             "INSERT INTO graph_versions(graph_version, graph_id, project_id, source_revision, created_at, truncated, omissions_json)
@@ -217,8 +438,8 @@ fn fresh_and_upgraded_v7_schema_match_and_migration_failure_rolls_back() {
         .expect("failure Context Ref");
     connection
         .execute_batch(
-            "CREATE TRIGGER fail_v7_context_update BEFORE UPDATE ON context_refs
-             BEGIN SELECT RAISE(ABORT, 'forced v7 migration failure'); END;",
+            "CREATE TRIGGER fail_v8_graph_update BEFORE UPDATE ON graph_versions
+             BEGIN SELECT RAISE(ABORT, 'forced v8 migration failure'); END;",
         )
         .expect("failure trigger");
     drop(connection);
@@ -229,27 +450,12 @@ fn fresh_and_upgraded_v7_schema_match_and_migration_failure_rolls_back() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .expect("failed version"),
-        6
+        7
     );
     assert!(
-        !table_columns_from_connection(&connection, "context_refs")
+        !table_columns_from_connection(&connection, "graph_versions")
             .iter()
-            .any(|column| column == "fingerprint_contract")
-    );
-    assert!(
-        !table_columns_from_connection(&connection, "project_state")
-            .iter()
-            .any(|column| column == "current_event_id")
-    );
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='observation_events'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .expect("event table check"),
-        0
+            .any(|column| column == "graph_schema_version")
     );
     drop(connection);
     fs::remove_dir_all(failed_root).expect("cleanup failed");

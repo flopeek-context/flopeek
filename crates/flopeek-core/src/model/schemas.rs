@@ -7,11 +7,11 @@
 use serde::{Deserialize, Serialize};
 
 pub const PRODUCT_IDENTITY: &str = "flopeek-repository-memory";
-pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v3";
+pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v4";
 pub const GRAPH_SCHEMA: &str = "flopeek-graph/v6";
 pub const CONTEXT_REF_SCHEMA: &str = "flopeek-context-ref/v3";
-pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v7";
-pub const STORE_SCHEMA: &str = "flopeek-sqlite/v5";
+pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v8";
+pub const STORE_SCHEMA: &str = "flopeek-sqlite/v6";
 pub const TYPESCRIPT_FACTS_SCHEMA: &str = "flopeek-typescript-facts/v4";
 pub const TYPESCRIPT_RESOLUTION_SCHEMA: &str = "flopeek-typescript-resolution/v3";
 pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v3";

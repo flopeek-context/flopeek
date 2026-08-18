@@ -125,6 +125,15 @@ and unresolved limitations. Historical snapshots include bounded package
 manifest metadata so entry changes can be reported as candidates without
 claiming causality.
 
+Adjacent local observations also expose `getObservationDelta`. The response
+compares only the direct predecessor event and records bounded source-path,
+node, edge, and flow changes when both graph derivation and fingerprint
+contracts are compatible. Legacy or incompatible graph contracts are
+`unavailable`; they are never compared by guesswork. The delta reports exact
+source/config/entry basis relations, truncation, and omissions without source
+bodies, runtime order, rename claims, or root-cause claims. Observation events
+remain local `observed-after` evidence rather than Git ancestry.
+
 ## Scope and provenance
 
 The TypeScript/TSX pilot is intentionally narrow. Historical Flopeek Core source

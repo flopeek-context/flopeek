@@ -36,28 +36,7 @@ pub fn persist_scan(
         .optional()
         .map_err(|error| format!("Unable to read graph identity: {error}"))?;
     let graph_version = if let Some(version) = existing {
-        let stored_counts = transaction
-            .query_row(
-                "SELECT
-                    (SELECT COUNT(*) FROM source_files WHERE graph_version = ?1),
-                    (SELECT COUNT(*) FROM graph_nodes WHERE graph_version = ?1),
-                    (SELECT COUNT(*) FROM graph_edges WHERE graph_version = ?1)",
-                rusqlite::params![version],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
-            )
-            .map_err(|error| format!("Unable to inspect reusable graph rows: {error}"))?;
-        let expected_counts = (
-            snapshot.files.len() as i64,
-            snapshot.nodes.len() as i64,
-            snapshot.edges.len() as i64,
-        );
-        if stored_counts != expected_counts {
+        if !graph_validation::graph_rows_match(&transaction, version, &snapshot, facts)? {
             transaction
                 .execute(
                     "DELETE FROM graph_flows WHERE graph_version = ?1",
@@ -90,6 +69,32 @@ pub fn persist_scan(
                 .map_err(|error| format!("Unable to recover corrupted graph rows: {error}"))?;
             persist_graph_rows(&transaction, version, &snapshot, facts)?;
         }
+        transaction
+            .execute(
+                "UPDATE graph_versions
+                 SET graph_id = ?1,
+                     project_id = ?2,
+                     truncated = ?3,
+                     omissions_json = ?4,
+                     graph_schema_version = ?5,
+                     graph_derivation_id = ?6,
+                     node_fingerprint_contract = ?7
+                 WHERE graph_version = ?8",
+                params![
+                    snapshot.graph_id,
+                    snapshot.project_id,
+                    i64::from(snapshot.truncated),
+                    serde_json::to_string(&snapshot.omissions)
+                        .map_err(|error| format!("Unable to encode graph omissions: {error}"))?,
+                    crate::model::GRAPH_SCHEMA,
+                    crate::graph::GRAPH_DERIVATION_ID,
+                    crate::temporal::NODE_FINGERPRINT_CONTRACT,
+                    version
+                ],
+            )
+            .map_err(|error| {
+                format!("Unable to record reusable graph evidence contract: {error}")
+            })?;
         version as u64
     } else {
         let version = transaction
@@ -101,8 +106,11 @@ pub fn persist_scan(
             .map_err(|error| format!("Unable to allocate graph version: {error}"))?;
         transaction
             .execute(
-                "INSERT INTO graph_versions(graph_version, graph_id, project_id, source_revision, created_at, truncated, omissions_json)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO graph_versions(
+                    graph_version, graph_id, project_id, source_revision, created_at,
+                    truncated, omissions_json, graph_schema_version, graph_derivation_id,
+                    node_fingerprint_contract
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     version,
                     snapshot.graph_id,
@@ -112,6 +120,9 @@ pub fn persist_scan(
                     i64::from(snapshot.truncated),
                     serde_json::to_string(&snapshot.omissions)
                         .map_err(|error| format!("Unable to encode graph omissions: {error}"))?,
+                    crate::model::GRAPH_SCHEMA,
+                    crate::graph::GRAPH_DERIVATION_ID,
+                    crate::temporal::NODE_FINGERPRINT_CONTRACT,
                 ],
             )
             .map_err(|error| format!("Unable to persist graph version: {error}"))?;

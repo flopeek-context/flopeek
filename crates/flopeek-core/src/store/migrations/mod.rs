@@ -4,12 +4,16 @@
 use super::*;
 
 mod base;
+mod evidence;
 mod helpers;
 mod temporal;
 mod versions;
 
 pub(super) use base::{migration_v1, migration_v2, migration_v3, migration_v4};
+pub(super) use evidence::migration_v8;
 pub(super) use helpers::*;
+#[cfg(test)]
+pub(crate) use temporal::migration_v7;
 pub(super) use versions::{migration_v5, migration_v6};
 
 #[allow(unused_imports)]
@@ -40,6 +44,7 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Strin
             5 => migration_v5(&transaction)?,
             6 => migration_v6(&transaction)?,
             7 => temporal::migration_v7(&transaction)?,
+            8 => migration_v8(&transaction)?,
             _ => unreachable!("migration target is bounded by CURRENT_USER_VERSION"),
         }
         transaction
