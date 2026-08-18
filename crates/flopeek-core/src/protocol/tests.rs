@@ -1,0 +1,226 @@
+use super::*;
+use crate::model::PROTOCOL_SCHEMA;
+use serde_json::{Value, json};
+use std::fs;
+use std::io::Cursor;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn temp_root() -> PathBuf {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("flopeek-protocol-{suffix}"));
+    fs::create_dir_all(root.join("src")).expect("src");
+    fs::create_dir_all(root.join("tests")).expect("tests");
+    fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"start":"tsx src/main.ts","unsupported":"tsx src/main.ts && echo credential-sentinel"}}"#,
+        )
+        .expect("package");
+    fs::write(
+        root.join("src/main.ts"),
+        "export function main() { return 'source-body-sentinel'; }\n",
+    )
+    .expect("main");
+    fs::write(
+        root.join("tests/main.test.ts"),
+        "import { main } from '../src/main'; main();\n",
+    )
+    .expect("test");
+    root
+}
+
+fn jsonl_request(id: usize, method: &str, params: Value) -> String {
+    serde_json::to_string(&json!({
+        "id": id,
+        "method": method,
+        "params": params,
+    }))
+    .expect("request")
+}
+
+#[test]
+fn jsonl_health_is_rust_only_and_deterministic() {
+    let input = Cursor::new(
+        br#"{"id":1,"method":"health","params":{}}
+"#,
+    );
+    let mut output = Vec::new();
+    serve_jsonl(input, &mut output).expect("serve");
+    let response: Value = serde_json::from_slice(&output).expect("json");
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["schemaVersion"], PROTOCOL_SCHEMA);
+    assert_eq!(response["result"]["core"], "rust");
+    assert_eq!(response["result"]["analyzedLanguages"][0], "typescript");
+    assert_eq!(response["result"]["diagnosticMetadataAuthority"], "sqlite");
+}
+
+#[test]
+fn invalid_jsonl_is_an_explicit_error() {
+    let input = Cursor::new(b"not-json\n");
+    let mut output = Vec::new();
+    serve_jsonl(input, &mut output).expect("serve");
+    let response: Value = serde_json::from_slice(&output).expect("json");
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["code"], "invalid-request");
+}
+
+#[test]
+fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
+    let root = temp_root();
+    let scan_line = format!(
+        "{}\n",
+        jsonl_request(1, "scan", json!({"projectRoot": root.to_string_lossy()}),)
+    );
+    let mut scan_output = Vec::new();
+    serve_jsonl(Cursor::new(scan_line), &mut scan_output).expect("scan serve");
+    let scan_response: Value = serde_json::from_slice(&scan_output).expect("scan json");
+    assert_eq!(scan_response["ok"], true);
+    let scan = &scan_response["result"];
+    let graph = &scan["graph"];
+    let flow_id = graph["flows"][0]["flowId"]
+        .as_str()
+        .expect("flow id")
+        .to_string();
+    let flow_uri = scan["flow_refs"][0]["uri"]
+        .as_str()
+        .expect("flow uri")
+        .to_string();
+    let node_uri = scan["context_refs"][0]["uri"]
+        .as_str()
+        .expect("node uri")
+        .to_string();
+    let node_id = graph["nodes"]
+        .as_array()
+        .and_then(|nodes| nodes.first())
+        .and_then(|node| node["id"].as_str())
+        .expect("node id")
+        .to_string();
+    let basis = json!({
+        "projectId": graph["project_id"],
+        "graphId": graph["graph_id"],
+        "graphVersion": graph["graph_version"],
+        "sourceRevision": graph["source_revision"],
+        "observationId": graph["observation_id"],
+    });
+    let context = json!({
+        "schemaVersion": "flopeek-diagnostic-context/v3",
+        "id": "jsonl-flow-context",
+        "projectId": scan["project_id"],
+        "revision": 0,
+        "intent": "diagnose",
+        "symptom": "static flow changed",
+        "expectedBehavior": "entry remains explicit",
+        "focusContextRefs": [node_uri],
+        "focusFlowRefs": [flow_uri.clone()],
+        "currentGraphBasis": basis,
+        "lastKnownGoodBasis": Value::Null,
+        "constraints": ["Static evidence only"],
+        "acceptanceCriteria": ["No runtime claim"],
+        "unresolvedQuestions": ["Was the entry invoked?"],
+        "actor": "jsonl-test",
+        "createdAt": 0,
+        "status": "open",
+        "supersedes": Value::Null,
+    });
+    let root_param = json!({"projectRoot": root.to_string_lossy()});
+    let requests = [
+        jsonl_request(2, "getGraph", root_param.clone()),
+        jsonl_request(3, "listFlows", root_param.clone()),
+        jsonl_request(
+            4,
+            "getFlow",
+            json!({"projectRoot": root.to_string_lossy(), "flowId": flow_id}),
+        ),
+        jsonl_request(
+            5,
+            "getRelatedTests",
+            json!({"projectRoot": root.to_string_lossy(), "flowId": graph["flows"][0]["flowId"]}),
+        ),
+        jsonl_request(
+            6,
+            "resolveFlowRef",
+            json!({"projectRoot": root.to_string_lossy(), "uri": flow_uri}),
+        ),
+        jsonl_request(
+            7,
+            "resolveContextRef",
+            json!({"projectRoot": root.to_string_lossy(), "uri": node_uri}),
+        ),
+        jsonl_request(
+            8,
+            "getNode",
+            json!({"projectRoot": root.to_string_lossy(), "nodeId": node_id}),
+        ),
+        jsonl_request(
+            9,
+            "createDiagnosticContext",
+            json!({"projectRoot": root.to_string_lossy(), "context": context}),
+        ),
+    ]
+    .join("\n")
+        + "\n";
+    let mut output = Vec::new();
+    serve_jsonl(Cursor::new(requests), &mut output).expect("surface methods");
+    let responses = String::from_utf8(output.clone())
+        .expect("response bytes")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("response json"))
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 8);
+    assert!(responses.iter().all(|response| response["ok"] == true));
+    assert_eq!(
+        responses[2]["result"]["flowId"],
+        graph["flows"][0]["flowId"]
+    );
+    assert_eq!(responses[4]["result"]["status"], "current");
+    assert_eq!(responses[5]["result"]["status"], "current");
+    assert_eq!(responses[6]["result"]["node"]["id"], node_id);
+    let context_id = responses[7]["result"]["id"]
+        .as_str()
+        .expect("context id")
+        .to_string();
+    let diagnosis_requests = [
+        jsonl_request(
+            10,
+            "diagnoseHistory",
+            json!({"projectRoot": root.to_string_lossy(), "contextId": context_id}),
+        ),
+        jsonl_request(
+            11,
+            "getDiagnosticPacket",
+            json!({"projectRoot": root.to_string_lossy(), "contextId": "jsonl-flow-context"}),
+        ),
+    ]
+    .join("\n")
+        + "\n";
+    let mut diagnosis_output = Vec::new();
+    serve_jsonl(Cursor::new(diagnosis_requests), &mut diagnosis_output).expect("diagnosis methods");
+    let diagnosis_responses = String::from_utf8(diagnosis_output.clone())
+        .expect("diagnosis response bytes")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("diagnosis json"))
+        .collect::<Vec<_>>();
+    assert!(
+        diagnosis_responses
+            .iter()
+            .all(|response| response["ok"] == true)
+    );
+    assert_eq!(
+        diagnosis_responses[1]["result"]["focusFlowRefs"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    let all_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output),
+        String::from_utf8_lossy(&diagnosis_output)
+    );
+    assert!(!all_output.contains("source-body-sentinel"));
+    assert!(!all_output.contains("credential-sentinel"));
+    assert!(!all_output.contains(root.to_string_lossy().as_ref()));
+    fs::remove_dir_all(root).expect("cleanup");
+}
