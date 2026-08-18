@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "unsupported": "npm run start && echo shell"
+  },
+  "bin": {
+    "checkout": "src/main.ts"
+  },
+  "main": "src/main",
+  "module": "src/main.ts"
+}

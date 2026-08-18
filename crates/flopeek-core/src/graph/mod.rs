@@ -1,6 +1,7 @@
 //! Deterministic graph assembly for TypeScript/TSX evidence.
 
 use crate::discovery::{discover, read_source};
+use crate::flow;
 use crate::module_resolution::{
     ModuleResolver, NonRelativeResolution, resolve_relative as resolve_module_relative,
 };
@@ -20,7 +21,7 @@ pub const MAX_GRAPH_NODES: usize = 50_000;
 pub const MAX_GRAPH_EDGES: usize = 100_000;
 pub const MAX_RESOLUTION_RECORDS: usize = 100_000;
 pub const MAX_REEXPORT_DEPTH: usize = 32;
-pub const GRAPH_DERIVATION_ID: &str = "typescript-structural-evidence-v5";
+pub const GRAPH_DERIVATION_ID: &str = "typescript-structural-evidence-v6";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ExportBinding {
@@ -329,6 +330,27 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
         omissions.extend(module_resolver.basis.limitations.clone());
     }
     assign_node_fingerprints(&mut nodes, &edges, &facts);
+    let project_id = project_id(root);
+    let flow_seed = flow::derive(root, &project_id, &files, &nodes, &edges)?;
+    nodes.extend(flow_seed.entry_nodes);
+    edges.extend(flow_seed.entry_edges);
+    edges.sort_by(|left, right| {
+        left.from
+            .cmp(&right.from)
+            .then_with(|| left.to.cmp(&right.to))
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.evidence.cmp(&right.evidence))
+    });
+    edges.dedup();
+    assign_node_fingerprints(&mut nodes, &edges, &facts);
+    let flow_derivation = flow::derive(root, &project_id, &files, &nodes, &edges)?;
+    let entry_evidence = flow_derivation.entry_evidence;
+    let related_test_evidence = flow_derivation.related_test_evidence;
+    let flows = flow_derivation.flows;
+    if flow_derivation.truncated {
+        truncated = true;
+        omissions.extend(flow_derivation.omissions);
+    }
     if nodes.len() > MAX_GRAPH_NODES {
         nodes.truncate(MAX_GRAPH_NODES);
         truncated = true;
@@ -342,7 +364,6 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
     omissions.sort();
     omissions.dedup();
 
-    let project_id = project_id(root);
     let source_revision = source_revision(root);
     let source_fingerprint = exact_source_fingerprint(&files)?;
     let identity_files = files
@@ -356,6 +377,11 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
         nodes: &nodes,
         edges: &edges,
         resolution_evidence: &resolution_evidence,
+        entry_effective_fingerprint: &entry_evidence.effective_fingerprint,
+        entry_status: &entry_evidence.status,
+        entry_records: &entry_evidence.records,
+        related_test_evidence: &related_test_evidence,
+        flows: &flows,
     };
     let graph_id = blake3::hash(&serde_json::to_vec(&identity).map_err(|error| error.to_string())?)
         .to_hex()
@@ -376,6 +402,9 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
             edges,
             resolution_evidence,
             module_resolution,
+            entry_evidence,
+            related_test_evidence,
+            flows,
             truncated,
             omissions,
         },
@@ -391,6 +420,11 @@ struct GraphIdentity<'a> {
     nodes: &'a [GraphNode],
     edges: &'a [GraphEdge],
     resolution_evidence: &'a ResolutionEvidence,
+    entry_effective_fingerprint: &'a str,
+    entry_status: &'a str,
+    entry_records: &'a [crate::model::EntryRecord],
+    related_test_evidence: &'a crate::model::RelatedTestEvidence,
+    flows: &'a [crate::model::ContextFlow],
 }
 
 fn build_module_exports(

@@ -383,6 +383,9 @@ mod tests {
             edges: Vec::new(),
             resolution_evidence: crate::model::ResolutionEvidence::default(),
             module_resolution: crate::model::ModuleResolutionBasis::default(),
+            entry_evidence: crate::model::EntryEvidence::default(),
+            related_test_evidence: crate::model::RelatedTestEvidence::default(),
+            flows: Vec::new(),
             truncated: false,
             omissions: Vec::new(),
         };

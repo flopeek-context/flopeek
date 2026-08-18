@@ -100,6 +100,9 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             "graphIdentityBasis": "typescript-structural-evidence",
             "sourceBasis": "immutable-graph-observation",
             "contextFreshness": "node-ast-and-direct-edges",
+            "flowEvidenceBasis": "root-package-manifest-and-static-call-projection",
+            "flowFreshness": "entry-step-evidence-and-traversed-edges",
+            "relatedTestEvidence": "direct-call-construct-or-import",
         })),
         "scan" => {
             let root = project_root(params)?;
@@ -128,6 +131,35 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| "resolveContextRef requires params.uri.".to_string())?;
             serde_json::to_value(store::resolve_context(&root, uri)?)
+                .map_err(|error| error.to_string())
+        }
+        "listFlows" => {
+            let root = project_root(params)?;
+            serde_json::to_value(store::list_flows(&root)?).map_err(|error| error.to_string())
+        }
+        "getFlow" => {
+            let root = project_root(params)?;
+            let flow_id = params
+                .get("flowId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "getFlow requires params.flowId.".to_string())?;
+            serde_json::to_value(store::get_flow(&root, flow_id)?)
+                .map_err(|error| error.to_string())
+        }
+        "resolveFlowRef" => {
+            let root = project_root(params)?;
+            let uri = params
+                .get("uri")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "resolveFlowRef requires params.uri.".to_string())?;
+            serde_json::to_value(store::resolve_flow(&root, uri)?)
+                .map_err(|error| error.to_string())
+        }
+        "getRelatedTests" => {
+            let root = project_root(params)?;
+            let node_id = params.get("nodeId").and_then(Value::as_str);
+            let flow_id = params.get("flowId").and_then(Value::as_str);
+            serde_json::to_value(store::related_tests(&root, node_id, flow_id)?)
                 .map_err(|error| error.to_string())
         }
         "createDiagnosticContext" => {

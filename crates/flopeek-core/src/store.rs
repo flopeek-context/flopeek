@@ -4,6 +4,7 @@
 //! and credentials never enter this store.
 
 use crate::context;
+use crate::flow_ref;
 use crate::model::{
     ContextRef, GraphEdge, GraphNode, GraphSnapshot, PRODUCT_IDENTITY, STORE_SCHEMA, ScanResult,
     SourceFile, StoreStatus, TypeScriptFacts,
@@ -15,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_DIRECTORY: &str = ".flopeek";
 pub const STORE_FILENAME: &str = "flopeek.sqlite3";
-pub const CURRENT_USER_VERSION: i64 = 5;
+pub const CURRENT_USER_VERSION: i64 = 6;
 
 pub fn database_path(root: &Path) -> PathBuf {
     root.join(STORE_DIRECTORY).join(STORE_FILENAME)
@@ -69,6 +70,7 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), String> {
             3 => migration_v3(&transaction)?,
             4 => migration_v4(&transaction)?,
             5 => migration_v5(&transaction)?,
+            6 => migration_v6(&transaction)?,
             _ => unreachable!("migration target is bounded by CURRENT_USER_VERSION"),
         }
         transaction
@@ -478,6 +480,106 @@ fn migration_v5(transaction: &Transaction<'_>) -> Result<(), String> {
     )
 }
 
+fn migration_v6(transaction: &Transaction<'_>) -> Result<(), String> {
+    add_column(
+        transaction,
+        "graph_observations",
+        "entry_manifest_status",
+        "TEXT NOT NULL DEFAULT 'legacy-entry-basis-unavailable'",
+    )?;
+    add_column(
+        transaction,
+        "graph_observations",
+        "entry_manifest_fingerprint",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column(
+        transaction,
+        "graph_observations",
+        "entry_effective_fingerprint",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column(
+        transaction,
+        "graph_observations",
+        "entry_manifest_json",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS graph_flow_evidence (
+                 graph_version INTEGER PRIMARY KEY NOT NULL REFERENCES graph_versions(graph_version),
+                 entry_json TEXT NOT NULL,
+                 related_tests_json TEXT NOT NULL,
+                 truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+                 omissions_json TEXT NOT NULL DEFAULT '[]'
+             );
+             CREATE TABLE IF NOT EXISTS graph_flows (
+                 graph_version INTEGER NOT NULL REFERENCES graph_versions(graph_version),
+                 flow_id TEXT NOT NULL,
+                 fingerprint TEXT NOT NULL,
+                 payload_json TEXT NOT NULL,
+                 PRIMARY KEY(graph_version, flow_id)
+             );
+             CREATE TABLE IF NOT EXISTS flow_refs (
+                 uri TEXT PRIMARY KEY NOT NULL,
+                 project_id TEXT NOT NULL,
+                 graph_id TEXT NOT NULL,
+                 graph_version INTEGER NOT NULL REFERENCES graph_versions(graph_version),
+                 flow_id TEXT NOT NULL,
+                 origin_observation_id TEXT NOT NULL,
+                 origin_source_revision TEXT NOT NULL,
+                 origin_fingerprint TEXT NOT NULL,
+                 fingerprint_scope TEXT NOT NULL,
+                 freshness_reason TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS graph_flows_id_idx ON graph_flows(flow_id, graph_version);
+             CREATE INDEX IF NOT EXISTS flow_refs_project_idx ON flow_refs(project_id, graph_version, flow_id);",
+        )
+        .map_err(|error| format!("Unable to initialize flow evidence schema: {error}"))?;
+    migrate_context_flow_refs(transaction)
+}
+
+fn migrate_context_flow_refs(transaction: &Transaction<'_>) -> Result<(), String> {
+    let rows = {
+        let mut statement = transaction
+            .prepare("SELECT id, payload_json FROM diagnostic_contexts")
+            .map_err(|error| format!("Unable to inspect Diagnostic Context payloads: {error}"))?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("Unable to enumerate Diagnostic Context payloads: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Unable to decode Diagnostic Context payloads: {error}"))?
+    };
+    for (id, payload) in rows {
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+            continue;
+        };
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "schemaVersion".to_string(),
+                serde_json::json!(crate::model::DIAGNOSTIC_CONTEXT_SCHEMA),
+            );
+            object
+                .entry("focusFlowRefs")
+                .or_insert_with(|| serde_json::json!([]));
+            let encoded = serde_json::to_string(&value).map_err(|error| {
+                format!("Unable to encode Diagnostic Context migration: {error}")
+            })?;
+            transaction
+                .execute(
+                    "UPDATE diagnostic_contexts SET payload_json = ?1 WHERE id = ?2",
+                    params![encoded, id],
+                )
+                .map_err(|error| format!("Unable to migrate Diagnostic Context {id}: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn add_column(
     transaction: &Transaction<'_>,
     table: &str,
@@ -503,10 +605,11 @@ fn observation_id(
     source_revision: &str,
     source_fingerprint: &str,
     module_resolution_fingerprint: &str,
+    entry_manifest_fingerprint: &str,
     graph_id: &str,
 ) -> String {
     let input = format!(
-        "flopeek-observation-v2\0{project_id}\0{source_revision}\0{source_fingerprint}\0{module_resolution_fingerprint}\0{graph_id}"
+        "flopeek-observation-v3\0{project_id}\0{source_revision}\0{source_fingerprint}\0{module_resolution_fingerprint}\0{entry_manifest_fingerprint}\0{graph_id}"
     );
     format!("observation_{}", blake3::hash(input.as_bytes()).to_hex())
 }
@@ -692,9 +795,21 @@ pub fn persist_scan(
         if stored_counts != expected_counts {
             transaction
                 .execute(
-                    "DELETE FROM graph_edges WHERE graph_version = ?1",
+                    "DELETE FROM graph_flows WHERE graph_version = ?1",
                     rusqlite::params![version],
                 )
+                .and_then(|_| {
+                    transaction.execute(
+                        "DELETE FROM graph_flow_evidence WHERE graph_version = ?1",
+                        rusqlite::params![version],
+                    )
+                })
+                .and_then(|_| {
+                    transaction.execute(
+                        "DELETE FROM graph_edges WHERE graph_version = ?1",
+                        rusqlite::params![version],
+                    )
+                })
                 .and_then(|_| {
                     transaction.execute(
                         "DELETE FROM graph_nodes WHERE graph_version = ?1",
@@ -739,6 +854,19 @@ pub fn persist_scan(
         version as u64
     };
     snapshot.graph_version = graph_version;
+    transaction
+        .execute(
+            "DELETE FROM graph_flows WHERE graph_version = ?1",
+            params![graph_version as i64],
+        )
+        .and_then(|_| {
+            transaction.execute(
+                "DELETE FROM graph_flow_evidence WHERE graph_version = ?1",
+                params![graph_version as i64],
+            )
+        })
+        .map_err(|error| format!("Unable to refresh flow evidence rows: {error}"))?;
+    persist_flow_rows(&transaction, graph_version as i64, &snapshot)?;
     let dirty = snapshot.source_revision.ends_with("+dirty");
     let git_revision = snapshot
         .source_revision
@@ -750,6 +878,7 @@ pub fn persist_scan(
         &snapshot.source_revision,
         &snapshot.source_fingerprint,
         &snapshot.module_resolution.exact_fingerprint,
+        &snapshot.entry_evidence.exact_fingerprint,
         &snapshot.graph_id,
     );
     let source_manifest_json = serde_json::to_string(&snapshot.files)
@@ -764,8 +893,9 @@ pub fn persist_scan(
                 source_fingerprint, source_manifest_json, dirty,
                 module_resolution_status, module_resolution_fingerprint,
                 module_resolution_effective_fingerprint, module_resolution_manifest_json,
-                observed_at
-             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                entry_manifest_status, entry_manifest_fingerprint,
+                entry_effective_fingerprint, entry_manifest_json, observed_at
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 observation,
                 snapshot.project_id,
@@ -778,6 +908,11 @@ pub fn persist_scan(
                 snapshot.module_resolution.exact_fingerprint,
                 snapshot.module_resolution.effective_fingerprint,
                 module_resolution_manifest_json,
+                snapshot.entry_evidence.status,
+                snapshot.entry_evidence.exact_fingerprint,
+                snapshot.entry_evidence.effective_fingerprint,
+                serde_json::to_string(&snapshot.entry_evidence.manifest)
+                    .map_err(|error| format!("Unable to encode entry manifest: {error}"))?,
                 now_seconds()
             ],
         )
@@ -792,6 +927,11 @@ pub fn persist_scan(
         )
         .map_err(|error| format!("Unable to update current project observation: {error}"))?;
     let refs = context::for_snapshot(&transaction, &snapshot)?;
+    let mut flow_refs = flow_ref::for_snapshot(&transaction, &snapshot)?;
+    let flow_refs_truncated = flow_refs.len() > crate::flow::MAX_FLOW_REFS;
+    if flow_refs_truncated {
+        flow_refs.truncate(crate::flow::MAX_FLOW_REFS);
+    }
     transaction
         .commit()
         .map_err(|error| format!("Unable to commit SQLite graph/context transaction: {error}"))?;
@@ -801,12 +941,63 @@ pub fn persist_scan(
         project_id: snapshot.project_id.clone(),
         graph: snapshot,
         context_refs: refs,
-        limitations: vec![
+        flow_refs,
+        limitations: {
+            let mut limitations = vec![
             "Evidence is static TypeScript/TSX syntax and Git identity; runtime behavior is unavailable.".to_string(),
             "Dynamic dispatch, reflection, generated files and package-manager execution are unsupported.".to_string(),
             "Historical change ranking is not inferred from this scan and must remain an explicit candidate.".to_string(),
-        ],
+            ];
+            if flow_refs_truncated {
+                limitations.push(format!(
+                    "Flow Refs capped at {}.",
+                    crate::flow::MAX_FLOW_REFS
+                ));
+            }
+            limitations
+        },
     })
+}
+
+fn persist_flow_rows(
+    transaction: &Transaction<'_>,
+    graph_version: i64,
+    snapshot: &GraphSnapshot,
+) -> Result<(), String> {
+    transaction
+        .execute(
+            "INSERT INTO graph_flow_evidence(graph_version, entry_json, related_tests_json, truncated, omissions_json)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![
+                graph_version,
+                serde_json::to_string(&snapshot.entry_evidence)
+                    .map_err(|error| format!("Unable to encode entry evidence: {error}"))?,
+                serde_json::to_string(&snapshot.related_test_evidence)
+                    .map_err(|error| format!("Unable to encode related-test evidence: {error}"))?,
+                i64::from(snapshot.entry_evidence.truncated || snapshot.related_test_evidence.truncated || snapshot.flows.iter().any(|flow| flow.truncated)),
+                serde_json::to_string(&snapshot.omissions)
+                    .map_err(|error| format!("Unable to encode flow omissions: {error}"))?,
+            ],
+        )
+        .map_err(|error| format!("Unable to persist flow evidence: {error}"))?;
+    for flow in &snapshot.flows {
+        transaction
+            .execute(
+                "INSERT INTO graph_flows(graph_version, flow_id, fingerprint, payload_json)
+                 VALUES(?1, ?2, ?3, ?4)",
+                params![
+                    graph_version,
+                    flow.flow_id,
+                    flow.fingerprint,
+                    serde_json::to_string(flow).map_err(|error| format!(
+                        "Unable to encode flow {}: {error}",
+                        flow.flow_id
+                    ))?,
+                ],
+            )
+            .map_err(|error| format!("Unable to persist flow {}: {error}", flow.flow_id))?;
+    }
+    Ok(())
 }
 
 fn persist_graph_rows(
@@ -943,6 +1134,54 @@ pub fn resolve_context(root: &Path, uri: &str) -> Result<ContextRef, String> {
     context::resolve(&connection, uri, &crate::graph::project_id(root))
 }
 
+pub fn resolve_flow(root: &Path, uri: &str) -> Result<crate::model::FlowRef, String> {
+    let connection = open(root)?;
+    flow_ref::resolve(&connection, uri, &crate::graph::project_id(root))
+}
+
+pub fn list_flows(root: &Path) -> Result<Vec<crate::model::ContextFlow>, String> {
+    let graph = current_graph(root)?.ok_or_else(|| "No graph has been scanned yet.".to_string())?;
+    Ok(graph.flows)
+}
+
+pub fn get_flow(root: &Path, flow_id: &str) -> Result<crate::model::ContextFlow, String> {
+    let graph = current_graph(root)?.ok_or_else(|| "No graph has been scanned yet.".to_string())?;
+    graph
+        .flows
+        .into_iter()
+        .find(|flow| flow.flow_id == flow_id)
+        .ok_or_else(|| "Flow is unavailable in the current graph.".to_string())
+}
+
+pub fn related_tests(
+    root: &Path,
+    node_id: Option<&str>,
+    flow_id: Option<&str>,
+) -> Result<crate::model::RelatedTestEvidence, String> {
+    if node_id.is_some() == flow_id.is_some() {
+        return Err("getRelatedTests requires exactly one of nodeId or flowId.".to_string());
+    }
+    let graph = current_graph(root)?.ok_or_else(|| "No graph has been scanned yet.".to_string())?;
+    let ids = if let Some(node_id) = node_id {
+        std::iter::once(node_id.to_string()).collect::<std::collections::BTreeSet<_>>()
+    } else {
+        let flow = graph
+            .flows
+            .iter()
+            .find(|flow| Some(flow.flow_id.as_str()) == flow_id)
+            .ok_or_else(|| "Flow is unavailable in the current graph.".to_string())?;
+        flow.steps
+            .iter()
+            .map(|step| step.node_id.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let mut evidence = graph.related_test_evidence;
+    evidence
+        .records
+        .retain(|record| ids.contains(&record.target_node_id));
+    Ok(evidence)
+}
+
 pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
     let connection = open(root)?;
     let project_id = crate::graph::project_id(root);
@@ -956,6 +1195,10 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         module_resolution_fingerprint,
         module_resolution_effective_fingerprint,
         module_resolution_manifest_json,
+        entry_manifest_status,
+        entry_manifest_fingerprint,
+        entry_effective_fingerprint,
+        entry_manifest_json,
         truncated,
         omissions_json,
     )) = connection
@@ -968,6 +1211,10 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
                      observation.module_resolution_fingerprint,
                      observation.module_resolution_effective_fingerprint,
                      observation.module_resolution_manifest_json,
+                     observation.entry_manifest_status,
+                     observation.entry_manifest_fingerprint,
+                     observation.entry_effective_fingerprint,
+                     observation.entry_manifest_json,
                      graph.truncated, graph.omissions_json
              FROM project_state state
              JOIN graph_observations observation ON observation.observation_id = state.current_observation_id
@@ -985,8 +1232,12 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
                     row.get::<_, String>(6)?,
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
-                    row.get::<_, i64>(9)?,
+                    row.get::<_, String>(9)?,
                     row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, String>(14)?,
                 ))
             },
         )
@@ -1130,6 +1381,73 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         limitations,
         omissions: module_resolution_omissions,
     };
+    let flow_evidence = connection
+        .query_row(
+            "SELECT entry_json, related_tests_json FROM graph_flow_evidence WHERE graph_version = ?1",
+            params![graph_version],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Unable to read flow evidence: {error}"))?;
+    let (entry_evidence, related_test_evidence) = if let Some((entry_json, related_json)) =
+        flow_evidence
+    {
+        (
+            serde_json::from_str(&entry_json)
+                .map_err(|error| format!("Unable to decode entry evidence: {error}"))?,
+            serde_json::from_str(&related_json)
+                .map_err(|error| format!("Unable to decode related-test evidence: {error}"))?,
+        )
+    } else {
+        let manifest = if entry_manifest_json.is_empty() {
+            None
+        } else {
+            serde_json::from_str(&entry_manifest_json).ok()
+        };
+        (
+            crate::model::EntryEvidence {
+                schema_version: crate::model::ENTRY_EVIDENCE_SCHEMA.to_string(),
+                status: if entry_manifest_status.is_empty()
+                    || entry_manifest_status.starts_with("legacy-")
+                {
+                    "unavailable"
+                } else {
+                    &entry_manifest_status
+                }
+                .to_string(),
+                manifest,
+                exact_fingerprint: entry_manifest_fingerprint,
+                effective_fingerprint: entry_effective_fingerprint,
+                records: Vec::new(),
+                truncated: false,
+                omissions: vec!["legacy-entry-basis-unavailable".to_string()],
+                limitations: vec!["legacy-v5-graph-requires-rescan-for-entry-evidence".to_string()],
+            },
+            crate::model::RelatedTestEvidence::default(),
+        )
+    };
+    let flows = connection
+        .prepare("SELECT flow_id, fingerprint, payload_json FROM graph_flows WHERE graph_version = ?1 ORDER BY flow_id")
+        .map_err(|error| format!("Unable to prepare flow query: {error}"))?
+        .query_map(params![graph_version], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| format!("Unable to query flows: {error}"))?
+        .map(|row| {
+            let (flow_id, fingerprint, payload) =
+                row.map_err(|error| format!("Unable to decode flow row: {error}"))?;
+            let flow: crate::model::ContextFlow = serde_json::from_str(&payload)
+                .map_err(|error| format!("Unable to decode flow payload: {error}"))?;
+            if flow.flow_id != flow_id || flow.fingerprint != fingerprint {
+                return Err("Persisted flow metadata conflicts with its payload.".to_string());
+            }
+            Ok(flow)
+        })
+        .collect::<Result<Vec<crate::model::ContextFlow>, String>>()?;
     Ok(Some(GraphSnapshot {
         schema_version: crate::model::GRAPH_SCHEMA.to_string(),
         product: PRODUCT_IDENTITY.to_string(),
@@ -1144,6 +1462,9 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         edges,
         resolution_evidence,
         module_resolution,
+        entry_evidence,
+        related_test_evidence,
+        flows,
         truncated: truncated != 0,
         omissions,
     }))
@@ -1203,6 +1524,14 @@ pub fn create_diagnostic_context(
             "Diagnostic Context current graph basis, including source revision, is not current."
                 .to_string(),
         );
+    }
+    for uri in &context.focus_flow_refs {
+        let resolved = resolve_flow(root, uri)?;
+        if resolved.project_id != project_id || resolved.status != "current" {
+            return Err(format!(
+                "Diagnostic Context focus Flow Ref {uri} is not current."
+            ));
+        }
     }
     let mut connection = open(root)?;
     let transaction = connection
@@ -1466,6 +1795,10 @@ fn now_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs().min(i64::MAX as u64) as i64)
+}
+
+pub(crate) fn now_seconds_for_sql() -> i64 {
+    now_seconds()
 }
 
 #[cfg(test)]
