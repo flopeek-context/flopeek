@@ -257,10 +257,8 @@ pub fn resolve(
     if status == "stale"
         && fingerprint_scope == "ast-and-direct-edges"
         && fingerprint_contract == crate::temporal::NODE_FINGERPRINT_CONTRACT
-        && origin_kind.is_some()
-        && current_basis.is_some()
+        && let (Some(basis), Some(origin_kind)) = (current_basis.as_ref(), origin_kind.as_ref())
     {
-        let basis = current_basis.as_ref().expect("checked above");
         let mut statement = connection
             .prepare(
                 "SELECT node.node_id, refs.uri, refs.fingerprint_scope,
@@ -283,7 +281,7 @@ pub fn resolve(
                     project_id,
                     basis.graph_id,
                     basis.graph_version as i64,
-                    origin_kind.as_ref().expect("checked above"),
+                    origin_kind,
                     origin_fingerprint
                 ],
                 |row| {
