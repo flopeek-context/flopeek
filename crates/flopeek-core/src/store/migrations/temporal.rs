@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn migration_v7(transaction: &Transaction<'_>) -> Result<(), String> {
+pub(crate) fn migration_v7(transaction: &Transaction<'_>) -> Result<(), String> {
     add_column(
         transaction,
         "context_refs",

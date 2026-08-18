@@ -3,6 +3,7 @@
 use crate::diagnostic;
 use crate::model::{DiagnosticAssertion, DiagnosticContext, PRODUCT_IDENTITY, PROTOCOL_SCHEMA};
 use crate::store;
+use crate::temporal::DeltaLimits;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -59,6 +60,7 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             "observationContinuity": "immutable-scan-event-chain",
             "contextReconciliation": "unique-exact-compatible-fingerprint",
             "automaticSupersession": "exact-single-candidate-only",
+            "structuralChangeAttribution": "adjacent-observation-compatible-evidence",
         })),
         "scan" => {
             let root = project_root(params)?;
@@ -97,6 +99,39 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
                 .unwrap_or(128)
                 .min(usize::MAX as u64) as usize;
             serde_json::to_value(store::get_observation_continuity(&root, max_events)?)
+                .map_err(|error| error.to_string())
+        }
+        "getObservationDelta" => {
+            let root = project_root(params)?;
+            let event_id = params.get("eventId").and_then(Value::as_str);
+            let defaults = DeltaLimits::default();
+            let limits = DeltaLimits {
+                max_source_changes: bounded_delta_limit(
+                    params,
+                    "maxSourceChanges",
+                    defaults.max_source_changes,
+                    1_000,
+                ),
+                max_node_changes: bounded_delta_limit(
+                    params,
+                    "maxNodeChanges",
+                    defaults.max_node_changes,
+                    2_000,
+                ),
+                max_edge_changes: bounded_delta_limit(
+                    params,
+                    "maxEdgeChanges",
+                    defaults.max_edge_changes,
+                    4_000,
+                ),
+                max_flow_changes: bounded_delta_limit(
+                    params,
+                    "maxFlowChanges",
+                    defaults.max_flow_changes,
+                    512,
+                ),
+            };
+            serde_json::to_value(store::get_observation_delta(&root, event_id, limits)?)
                 .map_err(|error| error.to_string())
         }
         "reconcileContextRef" => {
@@ -199,4 +234,11 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
         }
         _ => Err(format!("Unsupported protocol method: {method}")),
     }
+}
+
+fn bounded_delta_limit(params: &Value, key: &str, default: usize, maximum: usize) -> usize {
+    params
+        .get(key)
+        .and_then(Value::as_u64)
+        .map_or(default, |value| (value as usize).min(maximum))
 }

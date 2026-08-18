@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "flopeek-product-contract/v3",
+  "schemaVersion": "flopeek-product-contract/v4",
   "canonicalRepository": "flopeek-context/flopeek",
   "coreImplementation": "rust",
   "persistedAuthority": "sqlite",
@@ -17,6 +17,7 @@
   "observationContinuity": "immutable-scan-event-chain",
   "contextReconciliation": "unique-exact-compatible-fingerprint",
   "automaticSupersession": "exact-single-candidate-only",
+  "structuralChangeAttribution": "adjacent-observation-compatible-evidence",
   "normalCi": [
     "cargo fmt --all --check",
     "cargo clippy --workspace --all-targets -- -D warnings",

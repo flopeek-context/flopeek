@@ -19,9 +19,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_DIRECTORY: &str = ".flopeek";
 pub const STORE_FILENAME: &str = "flopeek.sqlite3";
-pub const CURRENT_USER_VERSION: i64 = 7;
+pub const CURRENT_USER_VERSION: i64 = 8;
 
+mod change;
 mod continuity;
+mod graph_validation;
 mod memory;
 mod migrations;
 mod query;
@@ -29,6 +31,7 @@ mod scan;
 #[cfg(test)]
 mod tests;
 
+pub use change::get_observation_delta;
 pub use continuity::{get_observation_continuity, reconcile_context};
 use memory::now_seconds;
 pub(crate) use memory::now_seconds_for_sql;

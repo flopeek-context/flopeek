@@ -5,7 +5,7 @@ use serde_json::Value;
 pub fn validate() -> Result<(), String> {
     let value: Value = serde_json::from_str(include_str!("../../../contracts/product.json"))
         .map_err(|error| format!("Invalid product contract JSON: {error}"))?;
-    if value["schemaVersion"] != "flopeek-product-contract/v3"
+    if value["schemaVersion"] != "flopeek-product-contract/v4"
         || value["canonicalRepository"] != "flopeek-context/flopeek"
         || value["coreImplementation"] != "rust"
         || value["persistedAuthority"] != "sqlite"
@@ -22,6 +22,7 @@ pub fn validate() -> Result<(), String> {
         || value["observationContinuity"] != "immutable-scan-event-chain"
         || value["contextReconciliation"] != "unique-exact-compatible-fingerprint"
         || value["automaticSupersession"] != "exact-single-candidate-only"
+        || value["structuralChangeAttribution"] != "adjacent-observation-compatible-evidence"
     {
         return Err("Product contract violates the Rust/SQLite TypeScript boundary.".to_string());
     }
