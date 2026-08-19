@@ -140,11 +140,14 @@ claiming causality.
 Last-known-good is explicit engineering evidence. The JSONL methods
 `createLastKnownGoodBinding`, `getLastKnownGood`, `listLastKnownGoodHistory`, and
 `validateLastKnownGood` persist an append-only binding per Diagnostic Context.
-Only a human actor may confirm, reject, revoke, or supersede a binding; agents and
-tools may propose one. Legacy `lastKnownGoodBasis` remains readable as
-`legacy-unbound` and is not used for new historical diagnosis. Flopeek never
-infers last-known-good from tests, commit messages, graph similarity, or candidate
-ranking.
+Agents and tools may propose one. Confirmation, rejection, revocation, and
+supersession require caller-attributed `actorKind = human`; this is attribution,
+not authenticated identity. Flopeek reduces the predecessor-linked lifecycle, so
+a revoked, rejected, or superseded confirmation is no longer active. A confirmed
+revision is usable for diagnosis only when it is on the current HEAD first-parent
+lineage. Legacy `lastKnownGoodBasis` remains readable as `legacy-unbound` and is
+not used for new historical diagnosis. Flopeek never infers last-known-good from
+tests, commit messages, graph similarity, or candidate ranking.
 
 Adjacent local observations also expose `getObservationDelta`. The response
 compares only the direct predecessor event and records bounded source-path,
@@ -158,11 +161,13 @@ remain local `observed-after` evidence rather than Git ancestry.
 
 `getHistoricalContextContinuity` compares one Context Ref across two adjacent
 Git snapshots. The default target is `HEAD` and the default source is its first
-parent. It reports bounded path, focused-node, direct-edge, and focused-flow
-changes plus exact-fingerprint lineage candidates. Rename/copy evidence is
-candidate evidence only; it never creates a successor URI or automatic
-supersession. Dirty state, incompatible snapshots, missing parents, and
-repository mismatches remain explicitly unavailable.
+parent. An explicit source revision must be exactly that direct first parent;
+non-adjacent pairs are unavailable rather than mislabeled as adjacent. The method
+reports bounded path, focused-node, direct-edge, and focused-flow changes plus
+exact-fingerprint lineage candidates. Rename/copy evidence is candidate evidence
+only; it never creates a successor URI or automatic supersession. Dirty state,
+incompatible snapshots, missing parents, and repository mismatches remain
+explicitly unavailable.
 
 ## Scope and provenance
 
