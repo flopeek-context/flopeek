@@ -85,7 +85,8 @@ fn last_known_good_is_append_only_and_human_confirmation_is_required() {
         evidence: Vec::new(),
         status: status.to_string(),
         predecessor_binding_id: None,
-        superseded_binding_id: None,
+        target_binding_id: None,
+        supersedes_binding_id: None,
         created_at: 0,
         validation: Default::default(),
     };
@@ -102,6 +103,7 @@ fn last_known_good_is_append_only_and_human_confirmation_is_required() {
     );
     let mut confirmed = binding("confirmed", "human", "human", "confirmed");
     confirmed.predecessor_binding_id = Some(proposed.binding_id.clone());
+    confirmed.target_binding_id = Some(proposed.binding_id.clone());
     let confirmed = create_last_known_good_binding(&root, confirmed).expect("confirmed");
     assert_eq!(confirmed.validation.status, "valid");
     assert_eq!(
@@ -121,8 +123,52 @@ fn last_known_good_is_append_only_and_human_confirmation_is_required() {
             .status,
         "valid"
     );
+    let mut pending_two = binding("pending-two", "agent", "agent", "proposed");
+    pending_two.predecessor_binding_id = Some(confirmed.binding_id.clone());
+    let pending_two = create_last_known_good_binding(&root, pending_two).expect("second proposal");
+    let mut duplicate = binding("duplicate", "agent", "agent", "proposed");
+    duplicate.predecessor_binding_id = Some(pending_two.binding_id.clone());
+    assert!(create_last_known_good_binding(&root, duplicate).is_err());
+    let mut rejected = binding("rejected", "human", "human", "rejected");
+    rejected.predecessor_binding_id = Some(pending_two.binding_id.clone());
+    rejected.target_binding_id = Some(pending_two.binding_id.clone());
+    create_last_known_good_binding(&root, rejected).expect("rejected proposal");
+    let after_rejection = get_last_known_good(&root, &context.id).expect("active after rejection");
+    assert_eq!(after_rejection.status, "confirmed");
+    assert_eq!(
+        after_rejection
+            .binding
+            .as_ref()
+            .map(|value| value.binding_id.as_str()),
+        Some("confirmed")
+    );
+    assert_eq!(
+        get_diagnostic_context(&root, &context.id)
+            .expect("context after rejection")
+            .last_known_good_binding_id
+            .as_deref(),
+        Some("confirmed")
+    );
+    let mut replacement_proposal = binding("replacement-proposal", "agent", "agent", "proposed");
+    replacement_proposal.predecessor_binding_id = Some("rejected".to_string());
+    let replacement_proposal =
+        create_last_known_good_binding(&root, replacement_proposal).expect("replacement proposal");
+    let mut replacement = binding("replacement", "human", "human", "confirmed");
+    replacement.predecessor_binding_id = Some(replacement_proposal.binding_id.clone());
+    replacement.target_binding_id = Some(replacement_proposal.binding_id.clone());
+    replacement.supersedes_binding_id = Some(confirmed.binding_id.clone());
+    let replacement = create_last_known_good_binding(&root, replacement).expect("replacement");
+    assert_eq!(
+        get_last_known_good(&root, &context.id)
+            .expect("replacement resolution")
+            .binding
+            .as_ref()
+            .map(|value| value.binding_id.as_str()),
+        Some("replacement")
+    );
     let mut revoked = binding("revoked", "human", "human", "revoked");
-    revoked.predecessor_binding_id = Some(confirmed.binding_id.clone());
+    revoked.predecessor_binding_id = Some(replacement.binding_id.clone());
+    revoked.target_binding_id = Some(replacement.binding_id.clone());
     create_last_known_good_binding(&root, revoked).expect("revoked");
     let resolution = get_last_known_good(&root, &context.id).expect("revoked resolution");
     assert_eq!(resolution.status, "revoked");
@@ -159,25 +205,8 @@ fn last_known_good_is_append_only_and_human_confirmation_is_required() {
         create_last_known_good_binding(&root, reconfirmed).expect("reconfirmed binding");
     let mut superseded = binding("superseded", "human", "human", "superseded");
     superseded.predecessor_binding_id = Some(reconfirmed.binding_id.clone());
-    superseded.superseded_binding_id = Some(reconfirmed.binding_id);
-    create_last_known_good_binding(&root, superseded).expect("superseded");
-    assert_eq!(
-        get_last_known_good(&root, &context.id)
-            .expect("superseded resolution")
-            .status,
-        "superseded"
-    );
-    assert!(
-        confirmed_last_known_good(&root, &context.id)
-            .expect("superseded effective confirmed")
-            .is_none()
-    );
-    assert!(
-        get_diagnostic_context(&root, &context.id)
-            .expect("context after supersession")
-            .last_known_good_binding_id
-            .is_none()
-    );
+    superseded.target_binding_id = Some(reconfirmed.binding_id);
+    assert!(create_last_known_good_binding(&root, superseded).is_err());
     assert_eq!(
         list_last_known_good_history(&root, &context.id)
             .expect("ordered history")
@@ -187,10 +216,39 @@ fn last_known_good_is_append_only_and_human_confirmation_is_required() {
         vec![
             "proposed",
             "confirmed",
+            "pending-two",
+            "rejected",
+            "replacement-proposal",
+            "replacement",
             "revoked",
-            "reconfirmed",
-            "superseded"
+            "reconfirmed"
         ]
+    );
+    let mut invalid_basis = binding("invalid-basis", "agent", "agent", "proposed");
+    invalid_basis.predecessor_binding_id = Some("reconfirmed".to_string());
+    invalid_basis.observation_id = Some("missing-observation".to_string());
+    invalid_basis.graph_basis = Some(crate::diagnostic::graph_basis(&scan.graph));
+    let invalid_basis = create_last_known_good_binding(&root, invalid_basis)
+        .expect("invalid provenance proposal is retained");
+    assert_eq!(invalid_basis.validation.status, "invalid");
+    assert!(
+        invalid_basis
+            .validation
+            .limitations
+            .iter()
+            .any(|value| value == "last-known-good-basis-provenance-mismatch")
+    );
+    let mut invalid_confirmation = binding("invalid-confirmation", "human", "human", "confirmed");
+    invalid_confirmation.predecessor_binding_id = Some(invalid_basis.binding_id.clone());
+    invalid_confirmation.target_binding_id = Some(invalid_basis.binding_id.clone());
+    assert!(create_last_known_good_binding(&root, invalid_confirmation).is_err());
+    assert_eq!(
+        get_last_known_good(&root, &context.id)
+            .expect("active binding after invalid proposal")
+            .binding
+            .as_ref()
+            .map(|value| value.binding_id.as_str()),
+        Some("reconfirmed")
     );
     fs::remove_dir_all(root).expect("cleanup");
 }
@@ -269,7 +327,8 @@ fn last_known_good_requires_current_first_parent_lineage() {
         evidence: Vec::new(),
         status: "proposed".to_string(),
         predecessor_binding_id: None,
-        superseded_binding_id: None,
+        target_binding_id: None,
+        supersedes_binding_id: None,
         created_at: 0,
         validation: Default::default(),
     };
@@ -293,6 +352,161 @@ fn last_known_good_requires_current_first_parent_lineage() {
     confirmation.validation = Default::default();
     assert!(create_last_known_good_binding(&root, confirmation).is_err());
     fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn lkg_v10_to_v11_migrates_targets_and_rolls_back_invalid_history() {
+    let upgraded_root = fixture_root();
+    initialize_v10_database(&upgraded_root);
+    let project_id = graph::project_id(&upgraded_root);
+    let connection = rusqlite::Connection::open(database_path(&upgraded_root)).expect("v10");
+    connection
+        .execute(
+            "INSERT INTO diagnostic_contexts(id, project_id, revision, payload_json, created_at)
+             VALUES('legacy-lkg-context', ?1, 1, '{}', 1)",
+            params![project_id],
+        )
+        .expect("context");
+    let proposal = serde_json::json!({
+        "schemaVersion": "flopeek-last-known-good/v1",
+        "bindingId": "legacy-proposal",
+        "repositoryId": "repo_legacy",
+        "projectId": project_id,
+        "contextId": "legacy-lkg-context",
+        "gitRevision": "legacy-revision",
+        "observationId": null,
+        "eventId": null,
+        "graphBasis": null,
+        "actor": "agent",
+        "actorKind": "agent",
+        "evidence": [],
+        "status": "proposed",
+        "predecessorBindingId": null,
+        "supersededBindingId": null,
+        "createdAt": 1,
+        "validation": {}
+    });
+    let confirmation = serde_json::json!({
+        "schemaVersion": "flopeek-last-known-good/v1",
+        "bindingId": "legacy-confirmation",
+        "repositoryId": "repo_legacy",
+        "projectId": project_id,
+        "contextId": "legacy-lkg-context",
+        "gitRevision": "legacy-revision",
+        "observationId": null,
+        "eventId": null,
+        "graphBasis": null,
+        "actor": "human",
+        "actorKind": "human",
+        "evidence": [],
+        "status": "confirmed",
+        "predecessorBindingId": "legacy-proposal",
+        "supersededBindingId": null,
+        "createdAt": 2,
+        "validation": {}
+    });
+    for (binding, predecessor, status, created_at) in [
+        (
+            proposal.to_string(),
+            Option::<String>::None,
+            "proposed",
+            1_i64,
+        ),
+        (
+            confirmation.to_string(),
+            Some("legacy-proposal".to_string()),
+            "confirmed",
+            2_i64,
+        ),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO last_known_good_bindings(
+                     binding_id, repository_id, project_id, context_id, git_revision,
+                     actor, actor_kind, evidence_json, status, predecessor_binding_id,
+                     superseded_binding_id, payload_json, created_at
+                 ) VALUES(?1, 'repo_legacy', ?2, 'legacy-lkg-context', 'legacy-revision',
+                          'actor', 'agent', '[]', ?3, ?4, NULL, ?5, ?6)",
+                params![
+                    if status == "proposed" {
+                        "legacy-proposal"
+                    } else {
+                        "legacy-confirmation"
+                    },
+                    project_id,
+                    status,
+                    predecessor,
+                    binding,
+                    created_at,
+                ],
+            )
+            .expect("legacy binding");
+    }
+    drop(connection);
+    let upgraded = open(&upgraded_root).expect("upgrade v11");
+    let target: Option<String> = upgraded
+        .query_row(
+            "SELECT target_binding_id FROM last_known_good_bindings
+             WHERE binding_id = 'legacy-confirmation'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("target column");
+    assert_eq!(target.as_deref(), Some("legacy-proposal"));
+    let payload: String = upgraded
+        .query_row(
+            "SELECT payload_json FROM last_known_good_bindings
+             WHERE binding_id = 'legacy-confirmation'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("payload");
+    let migrated: LastKnownGoodBinding = serde_json::from_str(&payload).expect("v2 payload");
+    assert_eq!(migrated.schema_version, LAST_KNOWN_GOOD_SCHEMA);
+    assert_eq!(
+        migrated.target_binding_id.as_deref(),
+        Some("legacy-proposal")
+    );
+    drop(upgraded);
+    fs::remove_dir_all(&upgraded_root).expect("cleanup upgraded");
+
+    let failed_root = fixture_root();
+    initialize_v10_database(&failed_root);
+    let project_id = graph::project_id(&failed_root);
+    let connection = rusqlite::Connection::open(database_path(&failed_root)).expect("failed v10");
+    connection
+        .execute(
+            "INSERT INTO diagnostic_contexts(id, project_id, revision, payload_json, created_at)
+             VALUES('broken-lkg-context', ?1, 1, '{}', 1)",
+            params![project_id],
+        )
+        .expect("broken context");
+    connection
+        .execute(
+            "INSERT INTO last_known_good_bindings(
+                 binding_id, repository_id, project_id, context_id, git_revision,
+                 actor, actor_kind, evidence_json, status, payload_json, created_at
+             ) VALUES('broken', 'repo_legacy', ?1, 'broken-lkg-context', 'revision',
+                      'agent', 'agent', '[]', 'proposed', '[]', 1)",
+            params![project_id],
+        )
+        .expect("broken binding");
+    drop(connection);
+    assert!(open(&failed_root).is_err());
+    let connection = rusqlite::Connection::open(database_path(&failed_root)).expect("reopen");
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .expect("version"),
+        10
+    );
+    assert!(
+        !table_columns_from_connection(&connection, "last_known_good_bindings")
+            .iter()
+            .any(|column| column == "target_binding_id")
+    );
+    drop(connection);
+    fs::remove_dir_all(failed_root).expect("cleanup failed");
 }
 
 #[test]
