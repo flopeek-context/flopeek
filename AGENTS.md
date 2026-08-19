@@ -401,12 +401,27 @@ LastKnownGoodEvent      = append-only PROPOSE/CONFIRM/REJECT/REVOKE event
 LastKnownGoodState      = pure deterministic reduction and projection
 ```
 
-Candidates bind repository/project, exact Context revision and expected behavior
-fingerprint, full Git SHA, observation-owned Graph Basis, evidence contract,
-proposer, evidence, reason, timestamp, and integrity. Integrity is `complete`,
-`partial`, or `invalid`; only `complete` candidates can be confirmed. A bounded
-detached historical observation may be `partial` without changing current
-project state or observation continuity.
+Diagnostic Context definition and engineering-memory progress are separate
+lifecycles. A Context definition has `contextDefinitionRevision` and a canonical
+`contextBasisFingerprint`; its assertion stream has an independent
+`memoryRevision`. Appending an observation, hypothesis, finding, remediation,
+or verification advances only engineering memory. It must not invalidate a
+last-known-good candidate whose Context definition remains unchanged.
+
+The `flopeek-diagnostic-context-basis/v1` fingerprint includes intent, symptom,
+expected behavior, canonical focus Context/Flow Refs, constraints, acceptance
+criteria, and unresolved questions. It excludes assertions, memory revision,
+current graph/observation, LKG projections, actor, timestamp, status, and
+supersession metadata. A future operation that changes included definition
+fields must advance the definition revision and recompute the fingerprint.
+
+Candidates bind repository/project, Context definition revision and basis
+fingerprint, expected-behavior fingerprint, full Git SHA, observation-owned
+Graph Basis, evidence contract, proposer, evidence, reason, timestamp, and
+integrity. Integrity is `complete`, `partial`, or `invalid`; only `complete`
+candidates can be confirmed. Applicability compares the immutable Context basis,
+not engineering-memory revision. A bounded detached historical observation may
+be `partial` without changing current project state or observation continuity.
 
 The reducer accepts only `PROPOSE`, `CONFIRM`, `REJECT`, and `REVOKE`; `SUPERSEDE`
 is forbidden. There is at most one pending and one active candidate. A proposal
@@ -439,21 +454,28 @@ Exact revision authority is `graph_observations.git_revision`. The
 `graph_versions.source_revision` column is structural materialization metadata
 only and must not be used to reject a candidate when its observation basis is
 consistent. Applicability is re-evaluated on read/use: repository and Context
-revision must match, the candidate revision must be on current HEAD's explicit
+definition basis must match, the candidate revision must be on current HEAD's explicit
 first-parent lineage, and observation/graph/evidence contracts must agree.
 Statuses include `applicable`, `out-of-lineage`, `repository-mismatch`,
-`context-revision-mismatch`, `basis-unavailable`, `contract-incompatible`, and
+`context-basis-mismatch`, `basis-unavailable`, `contract-incompatible`, and
 `unavailable`.
 
 The raw JSONL boundary is untrusted: it can propose but cannot confirm, reject,
 or revoke merely by sending `actorKind = human`. Those transitions are exposed
-only through the trusted local `flopeek lkg` CLI, whose actor identity is
-caller-attributed, not authenticated. Retry with the same idempotency key and
-payload is idempotent; a different payload or stale expected tip fails closed.
+through the trusted local process transition API. The `flopeek lkg` CLI is the
+official human-facing surface for that API; actor identity remains
+caller-attributed, not authenticated, and this is not a cryptographic security
+boundary. Retry identity is the canonical original command request, computed
+before resolving mutable Context or Git state. The same idempotency key and
+request fingerprint returns the original result without revalidation; a
+different request fingerprint or stale initial expected tip fails closed.
 Legacy v2 bindings remain raw read-only evidence and ambiguous semantics are
 quarantined during migration; they are never silently promoted into an active
-protocol state. Historical diagnosis uses only complete, applicable active
-candidates and never calls a candidate a cause or root cause.
+protocol state. Historical diagnosis always preserves an active candidate and
+its applicability, but inspects a Git range only for a complete, applicable
+candidate. Human-facing history order comes from `predecessorEventId`; timestamps
+are display metadata only. Historical candidates are never called a cause or
+root cause.
 
 ### 7.4 Diagnostic revision
 
@@ -1184,7 +1206,7 @@ Goal:
 
 Status:
 
-**implemented; LKG Protocol 1.0 conformant; correctness frozen**
+**correctness hardening in progress**
 
 Strengthen:
 
@@ -1200,7 +1222,7 @@ Strengthen:
 
 Status:
 
-**active**
+**paused pending Diagnostic Context/LKG interoperability conformance**
 
 Strengthen:
 
