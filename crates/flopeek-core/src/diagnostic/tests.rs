@@ -1,7 +1,10 @@
 //! Diagnostic behavior tests.
 
 use super::*;
-use crate::model::{DIAGNOSTIC_ASSERTION_SCHEMA, DIAGNOSTIC_CONTEXT_SCHEMA, EvidenceReference};
+use crate::model::{
+    DIAGNOSTIC_ASSERTION_SCHEMA, DIAGNOSTIC_CONTEXT_SCHEMA, EvidenceReference,
+    LastKnownGoodProposalRequest, LastKnownGoodTransitionRequest,
+};
 use crate::{graph, store};
 use rusqlite::OptionalExtension;
 use std::fs;
@@ -31,37 +34,38 @@ fn fixture_root() -> PathBuf {
 }
 
 fn confirm_lkg(root: &Path, context: &DiagnosticContext) {
-    let repository_id = crate::identity::resolve(root)
-        .expect("identity")
-        .repository_id
-        .expect("repository id");
     let revision = context
         .last_known_good_basis
         .as_ref()
         .expect("legacy test basis")
         .revision
         .clone();
-    store::create_last_known_good_binding(
+    store::propose_last_known_good(
         root,
-        crate::model::LastKnownGoodBinding {
-            schema_version: crate::model::LAST_KNOWN_GOOD_SCHEMA.to_string(),
-            binding_id: format!("lkg-{}", context.id),
-            repository_id,
-            project_id: context.project_id.clone(),
+        LastKnownGoodProposalRequest {
             context_id: context.id.clone(),
             git_revision: revision,
-            observation_id: None,
-            event_id: None,
-            graph_basis: None,
-            actor: "test-human".to_string(),
-            actor_kind: "human".to_string(),
+            actor: "test-agent".to_string(),
+            reason: "fixture last-known-good proposal".to_string(),
             evidence: vec![],
-            status: "confirmed".to_string(),
-            predecessor_binding_id: None,
-            target_binding_id: None,
-            supersedes_binding_id: None,
-            created_at: 0,
-            validation: Default::default(),
+            expected_tip_event_id: None,
+            idempotency_key: format!("fixture-lkg-proposal-{}", context.id),
+            max_paths: None,
+            max_snapshot_bytes: None,
+        },
+    )
+    .expect("propose last-known-good");
+    let state = store::get_last_known_good_protocol(root, &context.id).expect("LKG state");
+    store::confirm_last_known_good_local(
+        root,
+        LastKnownGoodTransitionRequest {
+            context_id: context.id.clone(),
+            actor: "test-human".to_string(),
+            reason: "fixture human confirmation".to_string(),
+            evidence: vec![],
+            expected_tip_event_id: state.tip_event_id,
+            idempotency_key: format!("fixture-lkg-confirm-{}", context.id),
+            candidate_id: None,
         },
     )
     .expect("confirm last-known-good");
@@ -124,6 +128,7 @@ fn context_for(root: &Path) -> (DiagnosticContext, String) {
         current_graph_basis: crate::diagnostic::graph_basis(&result.graph),
         last_known_good_basis: Some(GitBasis { revision: lkg }),
         last_known_good_binding_id: None,
+        last_known_good_candidate_id: None,
         constraints: vec!["Static evidence only".to_string()],
         acceptance_criteria: vec![
             "Retry and timeout changes remain candidates, never causes".to_string(),
@@ -566,6 +571,7 @@ fn flow_focused_history_and_packet_keep_exact_evidence_and_candidate_language() 
             revision: a.clone(),
         }),
         last_known_good_binding_id: None,
+        last_known_good_candidate_id: None,
         constraints: vec!["Static evidence only".to_string()],
         acceptance_criteria: vec!["Candidates remain non-causal".to_string()],
         unresolved_questions: vec!["Was the entry invoked?".to_string()],

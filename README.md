@@ -137,23 +137,31 @@ and unresolved limitations. Historical snapshots include bounded package
 manifest metadata so entry changes can be reported as candidates without
 claiming causality.
 
-Last-known-good is explicit engineering evidence. The JSONL methods
-`createLastKnownGoodBinding`, `getLastKnownGood`, `listLastKnownGoodHistory`, and
-`validateLastKnownGood` persist an append-only binding per Diagnostic Context.
-Version 2 uses targeted lifecycle fields: `predecessorBindingId` is append order,
-`targetBindingId` points at the proposal or active binding being acted on, and
-`supersedesBindingId` is present only on a replacement confirmation. Only one
-proposal may be pending; rejecting it preserves the active confirmation,
-revoking the active binding clears it, and replacement confirmation must target
-both the pending proposal and the active binding. Legacy `superseded` events are
-read-only and cannot be written. Confirmation, rejection, and revocation require
-caller-attributed `actorKind = human`; this is attribution, not authenticated
-identity. If a graph basis is supplied, its project, revision, graph, graph
-version, observation, and event must agree; mismatches are retained as invalid
-evidence and never used for diagnosis. A confirmed revision is usable only when
-it is on the current HEAD first-parent lineage and provenance-consistent. Legacy
-`lastKnownGoodBasis` remains readable as `legacy-unbound`. Flopeek never infers
-last-known-good from tests, commits, graph similarity, or candidate ranking.
+Last-known-good follows `flopeek-lkg-protocol/v1` and is split into an immutable
+`LastKnownGoodCandidate`, append-only `LastKnownGoodEvent`, and pure reduced
+`LastKnownGoodState`. Candidates are derived by Flopeek from the Context, full
+Git SHA, observation-owned graph basis, expected-behavior fingerprint, and
+evidence contract; callers cannot supply those authority fields. Integrity is
+`complete`, `partial`, or `invalid`, and only complete candidates can be
+confirmed. A bounded detached historical observation may be partial without
+changing current project state or observation continuity.
+
+Only `PROPOSE`, `CONFIRM`, `REJECT`, and `REVOKE` events are accepted. There is
+at most one pending and one active candidate. Rejection preserves an active
+candidate, revocation clears it, and replacement confirmation records the active
+candidate as `replacesCandidateId`. Raw JSONL is an untrusted transport: it can
+propose but cannot perform human-only transitions even when it sends
+`actorKind = human`. Use the trusted local CLI (`flopeek lkg propose|review|confirm|reject|revoke|get|history`), where actor identity is caller-attributed rather than authenticated.
+
+Exact revision authority comes from `graph_observations.git_revision`, not
+`graph_versions.source_revision`. Applicability is recomputed against the
+current Context revision and current HEAD first-parent lineage, with explicit
+`out-of-lineage`, `context-revision-mismatch`, `basis-unavailable`, and
+`contract-incompatible` statuses. Idempotent retries require the same payload;
+stale lifecycle tips and conflicting idempotency keys fail closed. Legacy v2
+bindings remain read-only evidence and ambiguous migration semantics are
+quarantined. Historical diagnosis consumes only complete, applicable active
+candidates and never labels a candidate a cause or root cause.
 
 Adjacent local observations also expose `getObservationDelta`. The response
 compares only the direct predecessor event and records bounded source-path,

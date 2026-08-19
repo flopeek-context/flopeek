@@ -16,7 +16,7 @@ pub(super) use evidence::migration_v8;
 pub(super) use helpers::*;
 pub(super) use identity::migration_v9;
 pub(super) use last_known_good::migration_v10;
-pub(super) use last_known_good::migration_v11;
+pub(super) use last_known_good::{migration_v11, migration_v12};
 #[cfg(test)]
 pub(crate) use temporal::migration_v7;
 pub(super) use versions::{migration_v5, migration_v6};
@@ -53,6 +53,7 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Strin
             9 => migration_v9(&transaction)?,
             10 => migration_v10(&transaction)?,
             11 => migration_v11(&transaction)?,
+            12 => migration_v12(&transaction)?,
             _ => unreachable!("migration target is bounded by CURRENT_USER_VERSION"),
         }
         transaction

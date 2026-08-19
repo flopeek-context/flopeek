@@ -460,3 +460,121 @@ pub(super) fn persist_graph_rows(
     }
     Ok(())
 }
+
+/// Persist a bounded detached historical observation without moving the
+/// checkout's project state or observation-event chain.  This is used by LKG
+/// proposal materialization; the exact Git revision remains owned by the
+/// observation row, never by `graph_versions.source_revision`.
+pub(super) fn persist_detached_observation(
+    transaction: &Transaction<'_>,
+    root: &Path,
+    mut snapshot: GraphSnapshot,
+    facts: &[TypeScriptFacts],
+) -> Result<GraphSnapshot, String> {
+    let identity = crate::identity::resolve(root)?;
+    if snapshot.project_id != identity.project_id {
+        return Err("historical-observation-project-mismatch".to_string());
+    }
+    snapshot.identity_basis = identity.basis.clone();
+    let existing = transaction
+        .query_row(
+            "SELECT graph_version FROM graph_versions WHERE graph_id = ?1",
+            params![snapshot.graph_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Unable to inspect detached graph identity: {error}"))?;
+    let graph_version = if let Some(version) = existing {
+        if !graph_validation::graph_rows_match(transaction, version, &snapshot, facts)? {
+            return Err("historical-observation-graph-rows-mismatch".to_string());
+        }
+        version
+    } else {
+        let version = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(graph_version), 0) + 1 FROM graph_versions",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| format!("Unable to allocate detached graph version: {error}"))?;
+        transaction
+            .execute(
+                "INSERT INTO graph_versions(
+                    graph_version, graph_id, project_id, source_revision, created_at,
+                    truncated, omissions_json, graph_schema_version, graph_derivation_id,
+                    node_fingerprint_contract
+                 ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                params![
+                    version,
+                    snapshot.graph_id,
+                    snapshot.project_id,
+                    snapshot.source_revision,
+                    now_seconds(),
+                    i64::from(snapshot.truncated),
+                    serde_json::to_string(&snapshot.omissions)
+                        .map_err(|error| format!("Unable to encode detached omissions: {error}"))?,
+                    crate::model::GRAPH_SCHEMA,
+                    crate::graph::GRAPH_DERIVATION_ID,
+                    crate::temporal::NODE_FINGERPRINT_CONTRACT,
+                ],
+            )
+            .map_err(|error| format!("Unable to persist detached graph version: {error}"))?;
+        persist_graph_rows(transaction, version, &snapshot, facts)?;
+        persist_flow_rows(transaction, version, &snapshot)?;
+        version
+    };
+    snapshot.graph_version = graph_version as u64;
+    let observation = super::observation_id(
+        &snapshot.project_id,
+        &snapshot.source_revision,
+        &snapshot.source_fingerprint,
+        &snapshot.module_resolution.exact_fingerprint,
+        &snapshot.entry_evidence.exact_fingerprint,
+        &snapshot.graph_id,
+    );
+    let source_manifest_json = serde_json::to_string(&snapshot.files)
+        .map_err(|error| format!("Unable to encode detached source manifest: {error}"))?;
+    let module_manifest_json = serde_json::to_string(&snapshot.module_resolution.config_files)
+        .map_err(|error| format!("Unable to encode detached module manifest: {error}"))?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO graph_observations(
+                observation_id, project_id, graph_version, git_revision,
+                source_fingerprint, source_manifest_json, dirty,
+                module_resolution_status, module_resolution_fingerprint,
+                module_resolution_effective_fingerprint, module_resolution_manifest_json,
+                entry_manifest_status, entry_manifest_fingerprint,
+                entry_effective_fingerprint, entry_manifest_json, observed_at,
+                repository_identity_status, repository_identity_id,
+                repository_manifest_path, repository_manifest_bytes,
+                repository_manifest_hash, checkout_id_hash
+             ) VALUES(?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+            params![
+                observation,
+                snapshot.project_id,
+                graph_version,
+                snapshot.source_revision,
+                snapshot.source_fingerprint,
+                source_manifest_json,
+                snapshot.module_resolution.status,
+                snapshot.module_resolution.exact_fingerprint,
+                snapshot.module_resolution.effective_fingerprint,
+                module_manifest_json,
+                snapshot.entry_evidence.status,
+                snapshot.entry_evidence.exact_fingerprint,
+                snapshot.entry_evidence.effective_fingerprint,
+                serde_json::to_string(&snapshot.entry_evidence.manifest)
+                    .map_err(|error| format!("Unable to encode detached entry manifest: {error}"))?,
+                now_seconds(),
+                snapshot.identity_basis.status,
+                snapshot.identity_basis.repository_id,
+                snapshot.identity_basis.manifest_path,
+                snapshot.identity_basis.manifest_bytes.map(|value| value as i64),
+                snapshot.identity_basis.manifest_hash,
+                identity.checkout_id,
+            ],
+        )
+        .map_err(|error| format!("Unable to persist detached graph observation: {error}"))?;
+    snapshot.observation_id = observation;
+    Ok(snapshot)
+}

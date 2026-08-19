@@ -98,6 +98,18 @@ fn jsonl_health_is_rust_only_and_deterministic() {
         "disabled-without-lineage-proof"
     );
     assert_eq!(
+        response["result"]["lastKnownGoodModel"],
+        "immutable-candidate-append-only-event-reduced-state"
+    );
+    assert_eq!(
+        response["result"]["lastKnownGoodLifecycle"],
+        "protocol-1.0-deterministic-reducer"
+    );
+    assert_eq!(
+        response["result"]["lastKnownGoodTrust"],
+        "local-transition-boundary-caller-attributed"
+    );
+    assert_eq!(
         response["result"]["structuralChangeAttribution"],
         "adjacent-observation-compatible-evidence"
     );
@@ -111,7 +123,7 @@ fn jsonl_health_is_rust_only_and_deterministic() {
     );
     assert_eq!(
         response["result"]["lastKnownGoodLifecycle"],
-        "targeted-append-only-state-machine"
+        "protocol-1.0-deterministic-reducer"
     );
     assert_eq!(
         response["result"]["lastKnownGoodProvenance"],
@@ -161,7 +173,7 @@ fn last_known_good_jsonl_methods_round_trip_with_human_confirmation() {
         "observationId": graph["observation_id"]
     });
     let context = json!({
-        "schemaVersion": "flopeek-diagnostic-context/v5",
+        "schemaVersion": "flopeek-diagnostic-context/v6",
         "id": "jsonl-lkg-context",
         "projectId": scan["result"]["project_id"],
         "revision": 0,
@@ -173,6 +185,7 @@ fn last_known_good_jsonl_methods_round_trip_with_human_confirmation() {
         "currentGraphBasis": basis,
         "lastKnownGoodBasis": null,
         "lastKnownGoodBindingId": null,
+        "lastKnownGoodCandidateId": null,
         "constraints": [],
         "acceptanceCriteria": [],
         "unresolvedQuestions": [],
@@ -188,55 +201,80 @@ fn last_known_good_jsonl_methods_round_trip_with_human_confirmation() {
         json!({"context": context}),
     );
     assert_eq!(created["ok"], true);
-    let binding = json!({
-        "schemaVersion": "flopeek-last-known-good/v2",
-        "bindingId": "jsonl-lkg-binding",
-        "repositoryId": "repo_123e4567-e89b-12d3-a456-426614174000",
-        "projectId": scan["result"]["project_id"],
-        "contextId": "jsonl-lkg-context",
-        "gitRevision": revision,
-        "observationId": null,
-        "eventId": null,
-        "graphBasis": null,
-        "actor": "human-reviewer",
-        "actorKind": "human",
-        "evidence": [],
-        "status": "confirmed",
-        "predecessorBindingId": null,
-        "targetBindingId": null,
-        "supersedesBindingId": null,
-        "createdAt": 0,
-        "validation": {}
-    });
-    let confirmed = serve_one(
+    let blocked = serve_one(
         &root,
         3,
         "createLastKnownGoodBinding",
-        json!({"binding": binding}),
+        json!({"binding": {}}),
     );
-    assert_eq!(confirmed["ok"], true);
-    assert_eq!(confirmed["result"]["validation"]["status"], "valid");
-    let current = serve_one(
+    assert_eq!(blocked["ok"], false);
+    assert_eq!(blocked["error"]["message"], "legacy-lkg-write-disabled");
+    let proposed = serve_one(
         &root,
         4,
+        "proposeLastKnownGood",
+        json!({
+            "contextId": "jsonl-lkg-context",
+            "gitRevision": revision,
+            "actor": "agent",
+            "reason": "fixture proposal",
+            "evidence": [],
+            "expectedTipEventId": null,
+            "idempotencyKey": "jsonl-proposal-1"
+        }),
+    );
+    assert_eq!(proposed["ok"], true);
+    assert_eq!(proposed["result"]["integrity"]["status"], "complete");
+    let current = serve_one(
+        &root,
+        5,
+        "getLastKnownGoodProtocol",
+        json!({"contextId": "jsonl-lkg-context"}),
+    );
+    assert_eq!(current["result"]["lifecycleStatus"], "pending");
+    let canonical_get = serve_one(
+        &root,
+        50,
         "getLastKnownGood",
         json!({"contextId": "jsonl-lkg-context"}),
     );
-    assert_eq!(current["result"]["status"], "confirmed");
-    let history = serve_one(
+    assert_eq!(canonical_get["result"]["lifecycleStatus"], "pending");
+    let canonical_history = serve_one(
         &root,
-        5,
+        51,
         "listLastKnownGoodHistory",
         json!({"contextId": "jsonl-lkg-context"}),
     );
-    assert_eq!(history["result"].as_array().expect("history").len(), 1);
-    let validated = serve_one(
+    assert_eq!(
+        canonical_history["result"].as_array().map(Vec::len),
+        Some(1)
+    );
+    let canonical_validation = serve_one(
+        &root,
+        52,
+        "validateLastKnownGood",
+        json!({"contextId": "jsonl-lkg-context"}),
+    );
+    assert_eq!(canonical_validation["result"]["lifecycleStatus"], "pending");
+    let review = serve_one(
         &root,
         6,
-        "validateLastKnownGood",
-        json!({"contextId": "jsonl-lkg-context", "bindingId": "jsonl-lkg-binding"}),
+        "getLastKnownGoodReviewPacket",
+        json!({"contextId": "jsonl-lkg-context"}),
     );
-    assert_eq!(validated["result"]["validation"]["status"], "valid");
+    assert_eq!(review["ok"], true);
+    assert_eq!(review["result"]["confirmable"], true);
+    let transition = serve_one(
+        &root,
+        7,
+        "confirmLastKnownGood",
+        json!({"contextId": "jsonl-lkg-context", "actorKind": "human"}),
+    );
+    assert_eq!(transition["ok"], false);
+    assert_eq!(
+        transition["error"]["message"],
+        "lkg-human-transition-requires-trusted-local-cli"
+    );
     fs::remove_dir_all(root).expect("cleanup");
 }
 
@@ -319,7 +357,7 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
         "observationId": graph["observation_id"],
     });
     let context = json!({
-        "schemaVersion": "flopeek-diagnostic-context/v5",
+        "schemaVersion": "flopeek-diagnostic-context/v6",
         "id": "jsonl-flow-context",
         "projectId": scan["project_id"],
         "revision": 0,

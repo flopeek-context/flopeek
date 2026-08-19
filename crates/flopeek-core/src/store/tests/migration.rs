@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn fresh_and_upgraded_v8_schema_match_and_migration_failure_rolls_back() {
+fn fresh_and_upgraded_v12_schema_match_and_migration_failure_rolls_back() {
     let fresh_root = fixture_root();
     let fresh = open(&fresh_root).expect("fresh schema");
     let fresh_schema = schema_snapshot(&fresh);
@@ -47,6 +47,23 @@ fn fresh_and_upgraded_v8_schema_match_and_migration_failure_rolls_back() {
             .expect("upgraded version"),
         CURRENT_USER_VERSION
     );
+    for table in [
+        "last_known_good_candidates",
+        "last_known_good_events",
+        "last_known_good_state",
+    ] {
+        assert_eq!(
+            upgraded
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    params![table],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("LKG table"),
+            1,
+            "missing canonical LKG table {table}"
+        );
+    }
     let migrated_context = upgraded
         .query_row(
             "SELECT payload_json FROM diagnostic_contexts WHERE id='context-v5'",
@@ -115,6 +132,64 @@ fn fresh_and_upgraded_v8_schema_match_and_migration_failure_rolls_back() {
     );
     drop(connection);
     fs::remove_dir_all(failed_root).expect("cleanup failed");
+}
+
+#[test]
+fn v11_to_v12_migration_failure_rolls_back_canonical_lkg_tables() {
+    let root = fixture_root();
+    initialize_v11_database(&root);
+    let project_id = graph::project_id(&root);
+    let connection = rusqlite::Connection::open(database_path(&root)).expect("v11 database");
+    connection
+        .execute(
+            "INSERT INTO diagnostic_contexts(id, project_id, revision, payload_json, created_at)
+             VALUES('legacy-lkg-context', ?1, 1, '{}', 1)",
+            params![project_id],
+        )
+        .expect("context");
+    connection
+        .execute(
+            "INSERT INTO last_known_good_bindings(
+                 binding_id, repository_id, project_id, context_id, git_revision,
+                 actor, actor_kind, evidence_json, status, payload_json, created_at
+             ) VALUES('legacy-invalid', 'repo', ?1, 'legacy-lkg-context', 'revision',
+                      'agent', 'agent', '[]', 'proposed', '{}', 1)",
+            params![project_id],
+        )
+        .expect("malformed legacy binding");
+    drop(connection);
+
+    assert!(open(&root).is_err(), "v12 must fail closed");
+    let connection = rusqlite::Connection::open(database_path(&root)).expect("reopen v11");
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .expect("version"),
+        11
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'last_known_good_candidates'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("canonical table check"),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT payload_json FROM last_known_good_bindings WHERE binding_id = 'legacy-invalid'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("legacy row"),
+        "{}"
+    );
+    drop(connection);
+    fs::remove_dir_all(root).expect("cleanup");
 }
 
 fn table_columns_from_connection(connection: &rusqlite::Connection, table: &str) -> Vec<String> {

@@ -23,7 +23,39 @@ pub fn diagnose_history(
         "Historical candidates are deterministic path/topology relevance signals, not runtime causes or root-cause findings.".to_string(),
         "Runtime execution, dynamic dispatch, reflection, generated code and business intent remain unavailable.".to_string(),
     ];
-    let confirmed_binding = store::confirmed_last_known_good(root, context_id)?;
+    let protocol_candidate = store::confirmed_protocol_candidate(root, context_id)?;
+    let protocol_state = Some(store::get_last_known_good_protocol(root, context_id)?);
+    let protocol_applicability =
+        protocol_candidate
+            .as_ref()
+            .map(|_| crate::model::LastKnownGoodApplicability {
+                status: "applicable".to_string(),
+                limitations: Vec::new(),
+            });
+    let confirmed_binding = if let Some(candidate) = protocol_candidate.clone() {
+        Some(crate::model::LastKnownGoodBinding {
+            schema_version: crate::model::LAST_KNOWN_GOOD_SCHEMA.to_string(),
+            binding_id: candidate.candidate_id.clone(),
+            repository_id: candidate.repository_id.clone(),
+            project_id: candidate.project_id.clone(),
+            context_id: candidate.context_id.clone(),
+            git_revision: candidate.git_revision.clone(),
+            observation_id: candidate.observation_id.clone(),
+            event_id: None,
+            graph_basis: candidate.graph_basis.clone(),
+            actor: candidate.proposed_by.clone(),
+            actor_kind: "human".to_string(),
+            evidence: candidate.evidence.clone(),
+            status: "confirmed".to_string(),
+            predecessor_binding_id: None,
+            target_binding_id: None,
+            supersedes_binding_id: None,
+            created_at: candidate.proposed_at,
+            validation: Default::default(),
+        })
+    } else {
+        None
+    };
     let Some(confirmed_binding) = confirmed_binding.clone() else {
         limitations.push(if context.last_known_good_basis.is_some() {
             "legacy last-known-good basis is legacy-unbound; no historical range was inspected."
@@ -37,6 +69,9 @@ pub fn diagnose_history(
             current_graph_basis: current_basis,
             last_known_good_basis: None,
             last_known_good_binding: None,
+            last_known_good_candidate: protocol_candidate.clone(),
+            last_known_good_state: protocol_state.clone(),
+            last_known_good_applicability: protocol_applicability.clone(),
             last_known_good_status: if context.last_known_good_basis.is_some() {
                 "legacy-unbound".to_string()
             } else {
@@ -86,6 +121,9 @@ pub fn diagnose_history(
                 revision: last_revision,
             }),
             last_known_good_binding: Some(confirmed_binding.clone()),
+            last_known_good_candidate: protocol_candidate.clone(),
+            last_known_good_state: protocol_state.clone(),
+            last_known_good_applicability: protocol_applicability.clone(),
             last_known_good_status: "confirmed".to_string(),
             range: Some(range),
             commits_inspected: 0,
@@ -108,6 +146,9 @@ pub fn diagnose_history(
                 revision: last_revision,
             }),
             last_known_good_binding: Some(confirmed_binding.clone()),
+            last_known_good_candidate: protocol_candidate.clone(),
+            last_known_good_state: protocol_state.clone(),
+            last_known_good_applicability: protocol_applicability.clone(),
             last_known_good_status: "confirmed".to_string(),
             range: Some(range),
             commits_inspected: 0,
@@ -129,6 +170,9 @@ pub fn diagnose_history(
                 revision: last_revision,
             }),
             last_known_good_binding: Some(confirmed_binding.clone()),
+            last_known_good_candidate: protocol_candidate.clone(),
+            last_known_good_state: protocol_state.clone(),
+            last_known_good_applicability: protocol_applicability.clone(),
             last_known_good_status: "confirmed".to_string(),
             range: Some(range),
             commits_inspected: 0,
@@ -337,6 +381,9 @@ pub fn diagnose_history(
             revision: last_revision,
         }),
         last_known_good_binding: Some(confirmed_binding),
+        last_known_good_candidate: protocol_candidate,
+        last_known_good_state: protocol_state,
+        last_known_good_applicability: protocol_applicability,
         last_known_good_status: "confirmed".to_string(),
         range: Some(range),
         commits_inspected: inspected.len(),

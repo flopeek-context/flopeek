@@ -1,7 +1,10 @@
 //! JSONL request decoding and method dispatch.
 
 use crate::diagnostic;
-use crate::model::{DiagnosticAssertion, DiagnosticContext, PRODUCT_IDENTITY, PROTOCOL_SCHEMA};
+use crate::model::{
+    DiagnosticAssertion, DiagnosticContext, LastKnownGoodProposalRequest, PRODUCT_IDENTITY,
+    PROTOCOL_SCHEMA,
+};
 use crate::store;
 use crate::temporal::DeltaLimits;
 use serde::{Deserialize, Serialize};
@@ -71,9 +74,13 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             "crossCheckoutContext": "repository-identity-required",
             "historicalContextContinuity": "adjacent-first-parent-static-evidence",
             "lastKnownGood": "attributed-human-confirmation",
-            "lastKnownGoodLifecycle": "targeted-append-only-state-machine",
+            "lastKnownGoodLifecycle": "protocol-1.0-deterministic-reducer",
             "lastKnownGoodProvenance": "revision-observation-graph-consistent",
             "humanActorIdentity": "caller-attributed-not-authenticated",
+            "lastKnownGoodModel": "immutable-candidate-append-only-event-reduced-state",
+            "lastKnownGoodIntegrity": "observation-owned-revision-and-graph-contract",
+            "lastKnownGoodApplicability": "current-first-parent-and-context-revision",
+            "lastKnownGoodTrust": "local-transition-boundary-caller-attributed",
         })),
         "scan" => {
             let root = project_root(params)?;
@@ -168,13 +175,70 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             )?)
             .map_err(|error| error.to_string())
         }
-        "createLastKnownGoodBinding" => {
+        "createLastKnownGoodBinding" => Err("legacy-lkg-write-disabled".to_string()),
+        "proposeLastKnownGood" => {
             let root = project_root(params)?;
-            let value = payload_value(params, "binding");
-            let binding = serde_json::from_value::<crate::model::LastKnownGoodBinding>(value)
-                .map_err(|error| format!("Invalid LastKnownGoodBinding: {error}"))?;
-            serde_json::to_value(store::create_last_known_good_binding(&root, binding)?)
+            let mut request_value = params.clone();
+            request_value
+                .as_object_mut()
+                .ok_or_else(|| "proposeLastKnownGood params must be an object.".to_string())?
+                .remove("projectRoot");
+            let request = serde_json::from_value::<LastKnownGoodProposalRequest>(request_value)
+                .map_err(|error| format!("Invalid LastKnownGoodProposalRequest: {error}"))?;
+            serde_json::to_value(store::propose_last_known_good(&root, request)?)
                 .map_err(|error| error.to_string())
+        }
+        "getLastKnownGoodProtocol" => {
+            let root = project_root(params)?;
+            let context_id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "getLastKnownGoodProtocol requires params.contextId.".to_string())?;
+            serde_json::to_value(store::get_last_known_good_protocol(&root, context_id)?)
+                .map_err(|error| error.to_string())
+        }
+        "listLastKnownGoodProtocol" => {
+            let root = project_root(params)?;
+            let context_id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    "listLastKnownGoodProtocol requires params.contextId.".to_string()
+                })?;
+            let limit = params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(128)
+                .min(1024) as usize;
+            serde_json::to_value(store::list_last_known_good_protocol(
+                &root, context_id, limit,
+            )?)
+            .map_err(|error| error.to_string())
+        }
+        "validateLastKnownGoodProtocol" => {
+            let root = project_root(params)?;
+            let context_id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    "validateLastKnownGoodProtocol requires params.contextId.".to_string()
+                })?;
+            serde_json::to_value(store::validate_last_known_good_protocol(&root, context_id)?)
+                .map_err(|error| error.to_string())
+        }
+        "getLastKnownGoodReviewPacket" => {
+            let root = project_root(params)?;
+            let context_id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    "getLastKnownGoodReviewPacket requires params.contextId.".to_string()
+                })?;
+            serde_json::to_value(store::get_last_known_good_review_packet(&root, context_id)?)
+                .map_err(|error| error.to_string())
+        }
+        "confirmLastKnownGood" | "rejectLastKnownGood" | "revokeLastKnownGood" => {
+            Err("lkg-human-transition-requires-trusted-local-cli".to_string())
         }
         "getLastKnownGood" => {
             let root = project_root(params)?;
@@ -182,7 +246,7 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
                 .get("contextId")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "getLastKnownGood requires params.contextId.".to_string())?;
-            serde_json::to_value(store::get_last_known_good(&root, context_id)?)
+            serde_json::to_value(store::get_last_known_good_protocol(&root, context_id)?)
                 .map_err(|error| error.to_string())
         }
         "listLastKnownGoodHistory" => {
@@ -191,8 +255,15 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
                 .get("contextId")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "listLastKnownGoodHistory requires params.contextId.".to_string())?;
-            serde_json::to_value(store::list_last_known_good_history(&root, context_id)?)
-                .map_err(|error| error.to_string())
+            let limit = params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(128)
+                .min(1024) as usize;
+            serde_json::to_value(store::list_last_known_good_protocol(
+                &root, context_id, limit,
+            )?)
+            .map_err(|error| error.to_string())
         }
         "validateLastKnownGood" => {
             let root = project_root(params)?;
@@ -200,14 +271,8 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
                 .get("contextId")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "validateLastKnownGood requires params.contextId.".to_string())?;
-            let binding_id = params
-                .get("bindingId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "validateLastKnownGood requires params.bindingId.".to_string())?;
-            serde_json::to_value(store::validate_last_known_good(
-                &root, context_id, binding_id,
-            )?)
-            .map_err(|error| error.to_string())
+            serde_json::to_value(store::validate_last_known_good_protocol(&root, context_id)?)
+                .map_err(|error| error.to_string())
         }
         "reconcileContextRef" => {
             let root = project_root(params)?;

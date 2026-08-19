@@ -80,6 +80,7 @@ pub use continuity::{HistoricalContinuityLimits, get_historical_context_continui
 pub use diagnosis::diagnose_history;
 pub(crate) use last_known_good::{resolve_last_known_good_revision, validate_first_parent_range};
 pub use packet::build_packet;
+pub(crate) use snapshot::build_historical_graph_materialization;
 
 pub fn validate_context(context: &DiagnosticContext) -> Result<(), String> {
     if context.schema_version != DIAGNOSTIC_CONTEXT_SCHEMA {

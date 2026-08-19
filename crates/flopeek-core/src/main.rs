@@ -6,10 +6,12 @@ use std::env;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
+mod cli;
+
 const CLI_SCHEMA: &str = "flopeek-cli/v1";
 
 fn usage() -> &'static str {
-    "Flopeek deterministic Rust repository evidence\n\nUsage:\n  flopeek scan [PATH]\n  flopeek status [PATH]\n  flopeek diagnose [PATH] CONTEXT_ID\n  flopeek packet [PATH] CONTEXT_ID\n  flopeek serve\n  flopeek --version\n  flopeek --help\n\nThe only repository-truth core is Rust. Evidence is persisted in SQLite under .flopeek/."
+    "Flopeek deterministic Rust repository evidence\n\nUsage:\n  flopeek scan [PATH]\n  flopeek status [PATH]\n  flopeek diagnose [PATH] CONTEXT_ID\n  flopeek packet [PATH] CONTEXT_ID\n  flopeek lkg <propose|review|confirm|reject|revoke|get|history> --context ID [options]\n  flopeek serve\n  flopeek --version\n  flopeek --help\n\nThe only repository-truth core is Rust. Evidence is persisted in SQLite under .flopeek/."
 }
 
 fn project_root(argument: Option<String>) -> Result<PathBuf, String> {
@@ -39,6 +41,7 @@ fn print_json(value: &serde_json::Value) -> Result<(), String> {
 
 fn run() -> Result<i32, String> {
     flopeek_core::contract::validate()?;
+    flopeek_core::contract::validate_lkg_protocol()?;
     let mut arguments = env::args().skip(1);
     let command = arguments.next().unwrap_or_else(|| "--help".to_string());
     match command.as_str() {
@@ -108,6 +111,7 @@ fn run() -> Result<i32, String> {
             print_json(&result)?;
             Ok(0)
         }
+        "lkg" => cli::run_lkg(&arguments.collect::<Vec<_>>()),
         other => Err(format!("Unknown command {other:?}.\n\n{}", usage())),
     }
 }
