@@ -7,8 +7,8 @@ use crate::model::{
     HistoricalSnapshot,
 };
 use continuity_evidence::{
-    bound_path_lineage, bound_paths, path_changes, path_lineage_candidates,
-    snapshot_basis_relations, unavailable_basis_relations,
+    bound_path_lineage, bound_paths, graph_basis_from_reference, path_changes,
+    path_lineage_candidates, snapshot_basis, snapshot_basis_relations, unavailable_basis_relations,
 };
 
 const MAX_CONTINUITY_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
@@ -52,9 +52,10 @@ pub fn get_historical_context_continuity(
         .map(|revision| resolve_revision(root, revision))
         .transpose()?
         .unwrap_or(current_head(root)?);
+    let direct_parent = first_parent(root, &to)?;
     let from = match from_revision {
         Some(revision) => Some(resolve_revision(root, revision)?),
-        None => first_parent(root, &to)?,
+        None => direct_parent.clone(),
     };
     let Some(from) = from else {
         return Ok(unavailable(
@@ -64,6 +65,17 @@ pub fn get_historical_context_continuity(
             "predecessor-revision-unavailable",
         ));
     };
+    if from_revision.is_some() && direct_parent.as_deref() != Some(from.as_str()) {
+        let mut response = unavailable(
+            graph.project_id,
+            uri,
+            "unavailable",
+            "non-adjacent-first-parent-range",
+        );
+        response.from_revision = Some(from);
+        response.to_revision = Some(to);
+        return Ok(response);
+    }
     let snapshot_limits = DiagnosticLimits {
         max_paths: limits.max_paths.max(1),
         max_snapshot_bytes: MAX_CONTINUITY_SNAPSHOT_BYTES,
@@ -288,38 +300,6 @@ fn unavailable(
         truncated: false,
         omissions: Vec::new(),
         limitations: vec![reason.to_string()],
-    }
-}
-
-fn graph_basis_from_reference(reference: &ContextRef) -> GraphBasis {
-    reference
-        .origin_basis
-        .clone()
-        .unwrap_or_else(|| GraphBasis {
-            project_id: reference.project_id.clone(),
-            graph_id: reference.graph_id.clone(),
-            graph_version: reference.graph_version,
-            source_revision: reference.origin_source_revision.clone(),
-            observation_id: reference.origin_observation_id.clone(),
-        })
-}
-
-fn snapshot_basis(snapshot: &HistoricalSnapshot) -> GraphBasis {
-    let bytes = serde_json::to_vec(&(
-        &snapshot.project_id,
-        &snapshot.source_revision,
-        &snapshot.files,
-        &snapshot.nodes,
-        &snapshot.edges,
-        &snapshot.flows,
-    ))
-    .unwrap_or_default();
-    GraphBasis {
-        project_id: snapshot.project_id.clone(),
-        graph_id: blake3::hash(&bytes).to_hex().to_string(),
-        graph_version: 0,
-        source_revision: snapshot.source_revision.clone(),
-        observation_id: String::new(),
     }
 }
 
