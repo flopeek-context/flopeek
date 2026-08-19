@@ -119,10 +119,12 @@ fn historical_context_continuity_compares_adjacent_first_parent_without_superses
         &reference.uri,
         Some(&first),
         Some(&second),
-        256,
-        512,
-        1_024,
-        128,
+        HistoricalContinuityLimits {
+            max_paths: 256,
+            max_nodes: 512,
+            max_edges: 1_024,
+            max_flows: 128,
+        },
     )
     .expect("continuity");
     assert_eq!(continuity.status, "available");

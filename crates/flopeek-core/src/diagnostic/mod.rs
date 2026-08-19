@@ -74,7 +74,7 @@ use validation::{
     validate_string_list, validate_text,
 };
 
-pub use continuity::get_historical_context_continuity;
+pub use continuity::{HistoricalContinuityLimits, get_historical_context_continuity};
 pub use diagnosis::diagnose_history;
 pub use packet::build_packet;
 

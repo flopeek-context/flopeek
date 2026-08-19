@@ -149,19 +149,18 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
                 .get("uri")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "getHistoricalContextContinuity requires params.uri.".to_string())?;
-            let max_paths = bounded_delta_limit(params, "maxPaths", 256, 1_000);
-            let max_nodes = bounded_delta_limit(params, "maxNodes", 512, 2_000);
-            let max_edges = bounded_delta_limit(params, "maxEdges", 1_024, 4_000);
-            let max_flows = bounded_delta_limit(params, "maxFlows", 128, 512);
+            let limits = diagnostic::HistoricalContinuityLimits {
+                max_paths: bounded_delta_limit(params, "maxPaths", 256, 1_000),
+                max_nodes: bounded_delta_limit(params, "maxNodes", 512, 2_000),
+                max_edges: bounded_delta_limit(params, "maxEdges", 1_024, 4_000),
+                max_flows: bounded_delta_limit(params, "maxFlows", 128, 512),
+            };
             serde_json::to_value(diagnostic::get_historical_context_continuity(
                 &root,
                 uri,
                 params.get("fromRevision").and_then(Value::as_str),
                 params.get("toRevision").and_then(Value::as_str),
-                max_paths,
-                max_nodes,
-                max_edges,
-                max_flows,
+                limits,
             )?)
             .map_err(|error| error.to_string())
         }
