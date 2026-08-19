@@ -9,15 +9,20 @@ use crate::model::{
 
 const MAX_CONTINUITY_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoricalContinuityLimits {
+    pub max_paths: usize,
+    pub max_nodes: usize,
+    pub max_edges: usize,
+    pub max_flows: usize,
+}
+
 pub fn get_historical_context_continuity(
     root: &Path,
     uri: &str,
     from_revision: Option<&str>,
     to_revision: Option<&str>,
-    max_paths: usize,
-    max_nodes: usize,
-    max_edges: usize,
-    max_flows: usize,
+    limits: HistoricalContinuityLimits,
 ) -> Result<HistoricalContextContinuity, String> {
     let graph = store::current_graph(root)?
         .ok_or_else(|| "A current graph is required for historical continuity.".to_string())?;
@@ -55,7 +60,7 @@ pub fn get_historical_context_continuity(
         ));
     };
     let snapshot_limits = DiagnosticLimits {
-        max_paths: max_paths.max(1),
+        max_paths: limits.max_paths.max(1),
         max_snapshot_bytes: MAX_CONTINUITY_SNAPSHOT_BYTES,
         ..DiagnosticLimits::default()
     };
@@ -109,7 +114,12 @@ pub fn get_historical_context_continuity(
 
     let path_changes_all = path_changes(&before, &after);
     let path_total = path_changes_all.len();
-    let path_changes = bound_paths(path_changes_all, max_paths, &mut truncated, &mut omissions);
+    let path_changes = bound_paths(
+        path_changes_all,
+        limits.max_paths,
+        &mut truncated,
+        &mut omissions,
+    );
 
     let before_node = before
         .nodes
@@ -126,21 +136,36 @@ pub fn get_historical_context_continuity(
             target_path.as_deref(),
         );
     let node_total = node_changes_all.len();
-    let node_changes = bound_nodes(node_changes_all, max_nodes, &mut truncated, &mut omissions);
+    let node_changes = bound_nodes(
+        node_changes_all,
+        limits.max_nodes,
+        &mut truncated,
+        &mut omissions,
+    );
     let edge_changes_all = direct_edge_changes(&before.edges, &after.edges, &reference.node_id);
     let edge_total = edge_changes_all.len();
-    let edge_changes = bound_edges(edge_changes_all, max_edges, &mut truncated, &mut omissions);
+    let edge_changes = bound_edges(
+        edge_changes_all,
+        limits.max_edges,
+        &mut truncated,
+        &mut omissions,
+    );
     let flow_changes_all = focused_flow_changes(&before, &after, &reference.node_id);
     let flow_total = flow_changes_all.len();
-    let flow_changes = bound_flows(flow_changes_all, max_flows, &mut truncated, &mut omissions);
+    let flow_changes = bound_flows(
+        flow_changes_all,
+        limits.max_flows,
+        &mut truncated,
+        &mut omissions,
+    );
     let candidate_total = lineage_candidates.len();
     let mut lineage_candidates = lineage_candidates;
-    if lineage_candidates.len() > max_nodes {
-        lineage_candidates.truncate(max_nodes);
+    if lineage_candidates.len() > limits.max_nodes {
+        lineage_candidates.truncate(limits.max_nodes);
         truncated = true;
-        omissions.push(format!("lineage candidates capped at {max_nodes}"));
+        omissions.push(format!("lineage candidates capped at {}", limits.max_nodes));
     }
-    if max_nodes == 0 && candidate_total > 0 {
+    if limits.max_nodes == 0 && candidate_total > 0 {
         lineage_candidates.clear();
         truncated = true;
         omissions.push("lineage candidates capped at zero".to_string());

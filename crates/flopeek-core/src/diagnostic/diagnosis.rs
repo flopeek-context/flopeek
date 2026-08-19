@@ -23,15 +23,25 @@ pub fn diagnose_history(
         "Historical candidates are deterministic path/topology relevance signals, not runtime causes or root-cause findings.".to_string(),
         "Runtime execution, dynamic dispatch, reflection, generated code and business intent remain unavailable.".to_string(),
     ];
-    let Some(last_known_good) = context.last_known_good_basis.clone() else {
-        limitations.push(
-            "last-known-good basis is unavailable; no historical range was inspected.".to_string(),
-        );
+    let confirmed_binding = store::confirmed_last_known_good(root, context_id)?;
+    let Some(confirmed_binding) = confirmed_binding.clone() else {
+        limitations.push(if context.last_known_good_basis.is_some() {
+            "legacy last-known-good basis is legacy-unbound; no historical range was inspected."
+                .to_string()
+        } else {
+            "last-known-good basis is unavailable; no historical range was inspected.".to_string()
+        });
         return Ok(HistoricalDiagnosis {
             schema_version: HISTORICAL_DIAGNOSIS_SCHEMA.to_string(),
             context_id: context.id,
             current_graph_basis: current_basis,
             last_known_good_basis: None,
+            last_known_good_binding: None,
+            last_known_good_status: if context.last_known_good_basis.is_some() {
+                "legacy-unbound".to_string()
+            } else {
+                "unavailable".to_string()
+            },
             range: None,
             commits_inspected: 0,
             candidates: Vec::new(),
@@ -41,6 +51,9 @@ pub fn diagnose_history(
         });
     };
 
+    let last_known_good = GitBasis {
+        revision: confirmed_binding.git_revision.clone(),
+    };
     let last_revision = resolve_revision(root, &last_known_good.revision)?;
     let current_revision = current_head(root)?;
     let range = format!("{last_revision}..{current_revision}");
@@ -72,6 +85,8 @@ pub fn diagnose_history(
             last_known_good_basis: Some(GitBasis {
                 revision: last_revision,
             }),
+            last_known_good_binding: Some(confirmed_binding.clone()),
+            last_known_good_status: "confirmed".to_string(),
             range: Some(range),
             commits_inspected: 0,
             candidates: Vec::new(),
@@ -92,6 +107,8 @@ pub fn diagnose_history(
             last_known_good_basis: Some(GitBasis {
                 revision: last_revision,
             }),
+            last_known_good_binding: Some(confirmed_binding.clone()),
+            last_known_good_status: "confirmed".to_string(),
             range: Some(range),
             commits_inspected: 0,
             candidates: Vec::new(),
@@ -111,6 +128,8 @@ pub fn diagnose_history(
             last_known_good_basis: Some(GitBasis {
                 revision: last_revision,
             }),
+            last_known_good_binding: Some(confirmed_binding.clone()),
+            last_known_good_status: "confirmed".to_string(),
             range: Some(range),
             commits_inspected: 0,
             candidates: Vec::new(),
@@ -317,6 +336,8 @@ pub fn diagnose_history(
         last_known_good_basis: Some(GitBasis {
             revision: last_revision,
         }),
+        last_known_good_binding: Some(confirmed_binding),
+        last_known_good_status: "confirmed".to_string(),
         range: Some(range),
         commits_inspected: inspected.len(),
         candidates,

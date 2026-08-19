@@ -146,7 +146,8 @@ pub fn build_packet(
     let mut packet = DiagnosticPacket {
         schema_version: DIAGNOSTIC_PACKET_SCHEMA.to_string(),
         current_graph_basis: current_basis.clone(),
-        last_known_good_basis: context.last_known_good_basis.clone(),
+        last_known_good_basis: historical.last_known_good_basis.clone(),
+        last_known_good_binding: historical.last_known_good_binding.clone(),
         focus_context_refs,
         focus_flow_refs,
         focus_nodes,

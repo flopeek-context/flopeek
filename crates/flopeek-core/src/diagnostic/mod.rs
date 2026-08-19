@@ -23,7 +23,7 @@ use std::process::Command;
 const MAX_ID_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_LIST_ITEMS: usize = 256;
-const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v8";
+const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v9";
 
 const ALLOWED_INTENTS: &[&str] = &["diagnose", "audit", "verify-fix"];
 const ALLOWED_CONTEXT_STATUSES: &[&str] = &["open", "reconciled", "resolved", "superseded"];
@@ -55,6 +55,7 @@ mod continuity;
 mod diagnosis;
 mod focus;
 mod git;
+mod last_known_good;
 mod packet;
 mod ranking;
 mod snapshot;
@@ -64,8 +65,8 @@ mod validation;
 
 use focus::{focus_paths, validate_basis};
 use git::{
-    current_head, first_parent, git_changed_paths, git_is_dirty, git_log, git_show_bytes,
-    git_tree_paths, historical_config_paths, resolve_revision, safe_relative_path,
+    current_head, first_parent, git_changed_paths, git_is_dirty, git_log, git_output,
+    git_show_bytes, git_tree_paths, historical_config_paths, resolve_revision, safe_relative_path,
 };
 use ranking::{CommitRecord, FocusPathSets, historical_delta_reasons};
 use snapshot::load_or_build_historical_snapshot;
@@ -74,8 +75,9 @@ use validation::{
     validate_string_list, validate_text,
 };
 
-pub use continuity::get_historical_context_continuity;
+pub use continuity::{HistoricalContinuityLimits, get_historical_context_continuity};
 pub use diagnosis::diagnose_history;
+pub(crate) use last_known_good::validate_revision_range;
 pub use packet::build_packet;
 
 pub fn validate_context(context: &DiagnosticContext) -> Result<(), String> {

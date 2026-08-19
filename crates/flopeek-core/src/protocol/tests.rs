@@ -3,7 +3,8 @@ use crate::model::PROTOCOL_SCHEMA;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_root() -> PathBuf {
@@ -39,6 +40,28 @@ fn jsonl_request(id: usize, method: &str, params: Value) -> String {
         "params": params,
     }))
     .expect("request")
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .expect("git");
+    assert!(output.status.success(), "git {args:?}");
+}
+
+fn serve_one(root: &Path, id: usize, method: &str, params: Value) -> Value {
+    let mut params = params.as_object().cloned().unwrap_or_default();
+    params.insert(
+        "projectRoot".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    let request = jsonl_request(id, method, Value::Object(params));
+    let mut output = Vec::new();
+    serve_jsonl(Cursor::new(format!("{request}\n")), &mut output).expect("serve request");
+    serde_json::from_slice(&output).expect("response")
 }
 
 #[test]
@@ -82,6 +105,126 @@ fn jsonl_health_is_rust_only_and_deterministic() {
         response["result"]["repositoryIdentity"],
         "explicit-versioned-root-manifest"
     );
+    assert_eq!(
+        response["result"]["lastKnownGood"],
+        "attributed-human-confirmation"
+    );
+}
+
+#[test]
+fn last_known_good_jsonl_methods_round_trip_with_human_confirmation() {
+    let root = temp_root();
+    fs::write(
+        root.join(crate::identity::MANIFEST_PATH),
+        r#"{"schemaVersion":"flopeek-repository-identity/v1","repositoryId":"repo_123e4567-e89b-12d3-a456-426614174000"}"#,
+    )
+    .expect("identity manifest");
+    git(&root, &["init"]);
+    git(
+        &root,
+        &["config", "user.email", "flopeek-test@example.invalid"],
+    );
+    git(&root, &["config", "user.name", "Flopeek Test"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "baseline"]);
+    let revision = String::from_utf8_lossy(
+        &Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("revision")
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    let scan = serve_one(&root, 1, "scan", json!({}));
+    assert_eq!(scan["ok"], true);
+    let graph = scan["result"]["graph"].clone();
+    let basis = json!({
+        "projectId": graph["project_id"],
+        "graphId": graph["graph_id"],
+        "graphVersion": graph["graph_version"],
+        "sourceRevision": graph["source_revision"],
+        "observationId": graph["observation_id"]
+    });
+    let context = json!({
+        "schemaVersion": "flopeek-diagnostic-context/v5",
+        "id": "jsonl-lkg-context",
+        "projectId": scan["result"]["project_id"],
+        "revision": 0,
+        "intent": "diagnose",
+        "symptom": "timeout",
+        "expectedBehavior": "completes",
+        "focusContextRefs": [scan["result"]["context_refs"][0]["uri"]],
+        "focusFlowRefs": [],
+        "currentGraphBasis": basis,
+        "lastKnownGoodBasis": null,
+        "lastKnownGoodBindingId": null,
+        "constraints": [],
+        "acceptanceCriteria": [],
+        "unresolvedQuestions": [],
+        "actor": "jsonl-test",
+        "createdAt": 0,
+        "status": "open",
+        "supersedes": null
+    });
+    let created = serve_one(
+        &root,
+        2,
+        "createDiagnosticContext",
+        json!({"context": context}),
+    );
+    assert_eq!(created["ok"], true);
+    let binding = json!({
+        "schemaVersion": "flopeek-last-known-good/v1",
+        "bindingId": "jsonl-lkg-binding",
+        "repositoryId": "repo_123e4567-e89b-12d3-a456-426614174000",
+        "projectId": scan["result"]["project_id"],
+        "contextId": "jsonl-lkg-context",
+        "gitRevision": revision,
+        "observationId": null,
+        "eventId": null,
+        "graphBasis": null,
+        "actor": "human-reviewer",
+        "actorKind": "human",
+        "evidence": [],
+        "status": "confirmed",
+        "predecessorBindingId": null,
+        "supersededBindingId": null,
+        "createdAt": 0,
+        "validation": {}
+    });
+    let confirmed = serve_one(
+        &root,
+        3,
+        "createLastKnownGoodBinding",
+        json!({"binding": binding}),
+    );
+    assert_eq!(confirmed["ok"], true);
+    assert_eq!(confirmed["result"]["validation"]["status"], "valid");
+    let current = serve_one(
+        &root,
+        4,
+        "getLastKnownGood",
+        json!({"contextId": "jsonl-lkg-context"}),
+    );
+    assert_eq!(current["result"]["status"], "confirmed");
+    let history = serve_one(
+        &root,
+        5,
+        "listLastKnownGoodHistory",
+        json!({"contextId": "jsonl-lkg-context"}),
+    );
+    assert_eq!(history["result"].as_array().expect("history").len(), 1);
+    let validated = serve_one(
+        &root,
+        6,
+        "validateLastKnownGood",
+        json!({"contextId": "jsonl-lkg-context", "bindingId": "jsonl-lkg-binding"}),
+    );
+    assert_eq!(validated["result"]["validation"]["status"], "valid");
+    fs::remove_dir_all(root).expect("cleanup");
 }
 
 #[test]
@@ -163,7 +306,7 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
         "observationId": graph["observation_id"],
     });
     let context = json!({
-        "schemaVersion": "flopeek-diagnostic-context/v4",
+        "schemaVersion": "flopeek-diagnostic-context/v5",
         "id": "jsonl-flow-context",
         "projectId": scan["project_id"],
         "revision": 0,

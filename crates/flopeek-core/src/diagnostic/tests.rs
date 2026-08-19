@@ -16,6 +16,11 @@ fn fixture_root() -> PathBuf {
         .as_nanos();
     let root = std::env::temp_dir().join(format!("flopeek-diagnostic-{suffix}"));
     fs::create_dir_all(root.join("src")).expect("mkdir");
+    fs::write(
+        root.join(crate::identity::MANIFEST_PATH),
+        r#"{"schemaVersion":"flopeek-repository-identity/v1","repositoryId":"repo_123e4567-e89b-12d3-a456-426614174000"}"#,
+    )
+    .expect("repository identity");
     git(&root, &["init"]);
     git(
         &root,
@@ -23,6 +28,42 @@ fn fixture_root() -> PathBuf {
     );
     git(&root, &["config", "user.name", "Flopeek Test"]);
     root
+}
+
+fn confirm_lkg(root: &Path, context: &DiagnosticContext) {
+    let repository_id = crate::identity::resolve(root)
+        .expect("identity")
+        .repository_id
+        .expect("repository id");
+    let revision = context
+        .last_known_good_basis
+        .as_ref()
+        .expect("legacy test basis")
+        .revision
+        .clone();
+    store::create_last_known_good_binding(
+        root,
+        crate::model::LastKnownGoodBinding {
+            schema_version: crate::model::LAST_KNOWN_GOOD_SCHEMA.to_string(),
+            binding_id: format!("lkg-{}", context.id),
+            repository_id,
+            project_id: context.project_id.clone(),
+            context_id: context.id.clone(),
+            git_revision: revision,
+            observation_id: None,
+            event_id: None,
+            graph_basis: None,
+            actor: "test-human".to_string(),
+            actor_kind: "human".to_string(),
+            evidence: vec![],
+            status: "confirmed".to_string(),
+            predecessor_binding_id: None,
+            superseded_binding_id: None,
+            created_at: 0,
+            validation: Default::default(),
+        },
+    )
+    .expect("confirm last-known-good");
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
@@ -81,6 +122,7 @@ fn context_for(root: &Path) -> (DiagnosticContext, String) {
         focus_flow_refs: Vec::new(),
         current_graph_basis: crate::diagnostic::graph_basis(&result.graph),
         last_known_good_basis: Some(GitBasis { revision: lkg }),
+        last_known_good_binding_id: None,
         constraints: vec!["Static evidence only".to_string()],
         acceptance_criteria: vec![
             "Retry and timeout changes remain candidates, never causes".to_string(),
@@ -119,10 +161,12 @@ fn historical_context_continuity_compares_adjacent_first_parent_without_superses
         &reference.uri,
         Some(&first),
         Some(&second),
-        256,
-        512,
-        1_024,
-        128,
+        HistoricalContinuityLimits {
+            max_paths: 256,
+            max_nodes: 512,
+            max_edges: 1_024,
+            max_flows: 128,
+        },
     )
     .expect("continuity");
     assert_eq!(continuity.status, "available");
@@ -206,6 +250,7 @@ fn real_fixture_merge_is_reported_as_first_parent_candidate() {
 
     let (context, _) = context_for(&root);
     let context = store::create_diagnostic_context(&root, context).expect("context");
+    confirm_lkg(&root, &context);
     let diagnosis =
         diagnose_history(&root, &context.id, DiagnosticLimits::default()).expect("history");
     assert_eq!(
@@ -279,6 +324,7 @@ fn history_fixture_ranks_typescript_candidates_and_excludes_unrelated_changes() 
 
     let (context, _) = context_for(&root);
     let context = store::create_diagnostic_context(&root, context).expect("context");
+    confirm_lkg(&root, &context);
     let diagnosis =
         diagnose_history(&root, &context.id, DiagnosticLimits::default()).expect("history");
     assert!(!diagnosis.truncated);
@@ -402,6 +448,7 @@ fn flow_focused_history_and_packet_keep_exact_evidence_and_candidate_language() 
         last_known_good_basis: Some(GitBasis {
             revision: a.clone(),
         }),
+        last_known_good_binding_id: None,
         constraints: vec!["Static evidence only".to_string()],
         acceptance_criteria: vec!["Candidates remain non-causal".to_string()],
         unresolved_questions: vec!["Was the entry invoked?".to_string()],
@@ -411,6 +458,7 @@ fn flow_focused_history_and_packet_keep_exact_evidence_and_candidate_language() 
         supersedes: None,
     };
     let context = store::create_diagnostic_context(&root, context).expect("context");
+    confirm_lkg(&root, &context);
     let diagnosis =
         diagnose_history(&root, &context.id, DiagnosticLimits::default()).expect("flow diagnosis");
     let candidate = diagnosis
