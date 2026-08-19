@@ -304,10 +304,7 @@ pub fn reduce_last_known_good(
                 seen_candidates.insert(event.candidate_id.clone());
             }
             "CONFIRM" => {
-                let direct_confirmation = pending.is_none()
-                    && active.is_none()
-                    && !seen_candidates.contains(&event.candidate_id);
-                if !direct_confirmation && pending.as_deref() != Some(event.candidate_id.as_str()) {
+                if pending.as_deref() != Some(event.candidate_id.as_str()) {
                     return Err("lkg-confirm-target-not-pending".to_string());
                 }
                 if let Some(active_id) = active.as_deref() {
@@ -315,9 +312,6 @@ pub fn reduce_last_known_good(
                         return Err("lkg-confirm-replacement-target-invalid".to_string());
                     }
                 } else if event.replaces_candidate_id.is_some() {
-                    return Err("lkg-confirm-replacement-without-active".to_string());
-                }
-                if direct_confirmation && event.replaces_candidate_id.is_some() {
                     return Err("lkg-confirm-replacement-without-active".to_string());
                 }
                 active = Some(event.candidate_id.clone());

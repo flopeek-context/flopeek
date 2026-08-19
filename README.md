@@ -149,9 +149,18 @@ changing current project state or observation continuity.
 Only `PROPOSE`, `CONFIRM`, `REJECT`, and `REVOKE` events are accepted. There is
 at most one pending and one active candidate. Rejection preserves an active
 candidate, revocation clears it, and replacement confirmation records the active
-candidate as `replacesCandidateId`. Raw JSONL is an untrusted transport: it can
+candidate as `replacesCandidateId`. Every confirmation requires a pending
+candidate; direct confirmation is rejected. Raw JSONL is an untrusted transport: it can
 propose but cannot perform human-only transitions even when it sends
 `actorKind = human`. Use the trusted local CLI (`flopeek lkg propose|review|confirm|reject|revoke|get|history`), where actor identity is caller-attributed rather than authenticated.
+
+The Review Packet selects the pending candidate before the active candidate. Its
+`applicability` describes that selected review candidate, while
+`state.applicabilityStatus` describes the effective reduced state (active first,
+otherwise pending). State reduction always uses the complete candidate/event
+stream. Protocol candidates remain the authority for diagnosis; compatibility
+`lastKnownGoodBinding` is not synthesized, so a proposer is never presented as
+the human confirmer. Confirmation attribution remains on the `CONFIRM` event.
 
 Exact revision authority comes from `graph_observations.git_revision`, not
 `graph_versions.source_revision`. Applicability is recomputed against the
@@ -162,6 +171,13 @@ stale lifecycle tips and conflicting idempotency keys fail closed. Legacy v2
 bindings remain read-only evidence and ambiguous migration semantics are
 quarantined. Historical diagnosis consumes only complete, applicable active
 candidates and never labels a candidate a cause or root cause.
+
+Graph reuse for detached historical observations validates structural graph
+evidence—metadata/contracts, canonical resolution and entry evidence, nodes,
+edges, related tests, and flows. Exact bytes, source hashes, positions, and raw
+facts are excluded from reuse; exact historical source remains owned by each
+immutable observation manifest. Detached materialization does not rewrite the
+current graph rows or observation continuity.
 
 Adjacent local observations also expose `getObservationDelta`. The response
 compares only the direct predecessor event and records bounded source-path,

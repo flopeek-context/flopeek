@@ -97,11 +97,14 @@ pub fn get_last_known_good_review_packet(root: &Path, context_id: &str) -> Resul
     let (candidates, reduced) = reduced(&transaction, context_id)?;
     let candidate_id = reduced.state.pending_candidate_id.as_ref().or(reduced.state.active_candidate_id.as_ref())
         .ok_or_else(|| "lkg-review-candidate-unavailable".to_string())?;
-    let candidate = candidates.into_iter().find(|value| &value.candidate_id == candidate_id)
+    let candidate = candidates
+        .iter()
+        .find(|value| &value.candidate_id == candidate_id)
+        .cloned()
         .ok_or_else(|| "lkg-review-candidate-unavailable".to_string())?;
     let context = context_snapshot(&transaction, context_id)?;
     let applicability = evaluate_applicability(&transaction, root, &candidate, &context)?;
-    let state = state_with_applicability(&transaction, root, std::slice::from_ref(&candidate), reduced.state)?;
+    let state = state_with_applicability(&transaction, root, &candidates, reduced.state)?;
     let current_observation_id = transaction
         .query_row(
             "SELECT current_observation_id FROM project_state WHERE project_id = ?1",

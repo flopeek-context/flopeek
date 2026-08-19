@@ -88,7 +88,12 @@ pub fn persist_scan(
         .optional()
         .map_err(|error| format!("Unable to read graph identity: {error}"))?;
     let graph_version = if let Some(version) = existing {
-        if !graph_validation::graph_rows_match(&transaction, version, &snapshot, facts)? {
+        if !graph_validation::exact_materialization_matches(
+            &transaction,
+            version,
+            &snapshot,
+            facts,
+        )? {
             transaction
                 .execute(
                     "DELETE FROM graph_flows WHERE graph_version = ?1",
@@ -485,7 +490,7 @@ pub(super) fn persist_detached_observation(
         .optional()
         .map_err(|error| format!("Unable to inspect detached graph identity: {error}"))?;
     let graph_version = if let Some(version) = existing {
-        if !graph_validation::graph_rows_match(transaction, version, &snapshot, facts)? {
+        if !graph_validation::structural_graph_compatible(transaction, version, &snapshot)? {
             return Err("historical-observation-graph-rows-mismatch".to_string());
         }
         version

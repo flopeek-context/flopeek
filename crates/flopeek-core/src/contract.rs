@@ -60,6 +60,10 @@ pub fn validate() -> Result<(), String> {
 pub fn validate_lkg_protocol() -> Result<(), String> {
     let value: Value = serde_json::from_str(include_str!("../../../contracts/lkg-protocol.json"))
         .map_err(|error| format!("Invalid LKG protocol contract JSON: {error}"))?;
+    validate_lkg_protocol_value(&value)
+}
+
+fn validate_lkg_protocol_value(value: &Value) -> Result<(), String> {
     if value["schemaVersion"] != "flopeek-lkg-protocol/v1"
         || value["candidate"]["schemaVersion"] != "flopeek-last-known-good-candidate/v1"
         || value["event"]["schemaVersion"] != "flopeek-last-known-good-event/v1"
@@ -74,10 +78,52 @@ pub fn validate_lkg_protocol() -> Result<(), String> {
                 "candidate-to-current-structural-delta",
                 "confirmability"
             ])
+        || value["reviewPacket"]["candidateSelection"] != "pending-first-otherwise-active"
+        || value["reviewPacket"]["applicabilitySemantics"]
+            != serde_json::json!({
+                "packetApplicability": "selected-review-candidate",
+                "stateApplicability": "effective-state-active-first-otherwise-pending",
+                "stateReduction": "complete-context-candidate-and-event-stream"
+            })
         || value["event"]["types"] != serde_json::json!(["PROPOSE", "CONFIRM", "REJECT", "REVOKE"])
         || value["event"]["forbiddenTypes"] != serde_json::json!(["SUPERSEDE"])
         || value["event"]["onePendingCandidate"] != true
         || value["event"]["oneActiveCandidate"] != true
+        || value["transitionMatrix"]
+            != serde_json::json!({
+                "PROPOSE": "creates-pending-only",
+                "CONFIRM": "targets-pending-and-optionally-replaces-active",
+                "REJECT": "targets-pending-and-preserves-active",
+                "REVOKE": "targets-active-and-clears-active"
+            })
+        || value["confirmation"]
+            != serde_json::json!({
+                "requiresPendingCandidate": true,
+                "directConfirmation": false,
+                "invalidReason": "lkg-confirm-target-not-pending"
+            })
+        || value["graphReuse"]["structuralCompatibility"]
+            != serde_json::json!([
+                "graph-metadata-and-evidence-contract",
+                "canonical-resolution-entry-related-test-evidence",
+                "nodes",
+                "edges",
+                "flows"
+            ])
+        || value["graphReuse"]["exactSourceAuthority"] != "graph_observations.source_manifest_json"
+        || value["graphReuse"]["exactSourceExcludedFromReuse"]
+            != serde_json::json!([
+                "bytes",
+                "raw-source-hash",
+                "source-hash",
+                "source-position",
+                "serialized-facts"
+            ])
+        || value["compatibility"]
+            != serde_json::json!({
+                "protocolBindingSynthesis": false,
+                "confirmerAttribution": "confirm-event-only"
+            })
         || value["concurrency"]["expectedTipRequired"] != true
         || value["concurrency"]["idempotencyRequired"] != true
         || value["trust"]["actorIdentity"] != "caller-attributed-not-authenticated"
@@ -101,5 +147,21 @@ mod tests {
     #[test]
     fn lkg_protocol_contract_is_machine_checked() {
         super::validate_lkg_protocol().expect("LKG protocol contract");
+    }
+
+    #[test]
+    fn lkg_protocol_validator_rejects_transition_and_review_drift() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../../../contracts/lkg-protocol.json"))
+                .expect("protocol contract");
+        value["confirmation"]["directConfirmation"] = serde_json::json!(true);
+        assert!(super::validate_lkg_protocol_value(&value).is_err());
+
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../../../contracts/lkg-protocol.json"))
+                .expect("protocol contract");
+        value["reviewPacket"]["candidateSelection"] =
+            serde_json::json!("active-first-otherwise-pending");
+        assert!(super::validate_lkg_protocol_value(&value).is_err());
     }
 }
