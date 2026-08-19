@@ -70,6 +70,7 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             "legacyProjectIdentity": "local-alias-only",
             "crossCheckoutContext": "repository-identity-required",
             "historicalContextContinuity": "adjacent-first-parent-static-evidence",
+            "lastKnownGood": "attributed-human-confirmation",
         })),
         "scan" => {
             let root = project_root(params)?;
@@ -158,10 +159,53 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
                 uri,
                 params.get("fromRevision").and_then(Value::as_str),
                 params.get("toRevision").and_then(Value::as_str),
-                max_paths,
-                max_nodes,
-                max_edges,
-                max_flows,
+                diagnostic::HistoricalContinuityLimits {
+                    max_paths,
+                    max_nodes,
+                    max_edges,
+                    max_flows,
+                },
+            )?)
+            .map_err(|error| error.to_string())
+        }
+        "createLastKnownGoodBinding" => {
+            let root = project_root(params)?;
+            let value = payload_value(params, "binding");
+            let binding = serde_json::from_value::<crate::model::LastKnownGoodBinding>(value)
+                .map_err(|error| format!("Invalid LastKnownGoodBinding: {error}"))?;
+            serde_json::to_value(store::create_last_known_good_binding(&root, binding)?)
+                .map_err(|error| error.to_string())
+        }
+        "getLastKnownGood" => {
+            let root = project_root(params)?;
+            let context_id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "getLastKnownGood requires params.contextId.".to_string())?;
+            serde_json::to_value(store::get_last_known_good(&root, context_id)?)
+                .map_err(|error| error.to_string())
+        }
+        "listLastKnownGoodHistory" => {
+            let root = project_root(params)?;
+            let context_id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "listLastKnownGoodHistory requires params.contextId.".to_string())?;
+            serde_json::to_value(store::list_last_known_good_history(&root, context_id)?)
+                .map_err(|error| error.to_string())
+        }
+        "validateLastKnownGood" => {
+            let root = project_root(params)?;
+            let context_id = params
+                .get("contextId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "validateLastKnownGood requires params.contextId.".to_string())?;
+            let binding_id = params
+                .get("bindingId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "validateLastKnownGood requires params.bindingId.".to_string())?;
+            serde_json::to_value(store::validate_last_known_good(
+                &root, context_id, binding_id,
             )?)
             .map_err(|error| error.to_string())
         }
