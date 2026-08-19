@@ -44,7 +44,9 @@ fn setup() -> (std::path::PathBuf, DiagnosticContext, String) {
             schema_version: DIAGNOSTIC_CONTEXT_SCHEMA.to_string(),
             id: "lkg-protocol-context".to_string(),
             project_id: scan.project_id.clone(),
-            revision: 0,
+            context_definition_revision: 0,
+            context_basis_fingerprint: String::new(),
+            memory_revision: 0,
             intent: "diagnose".to_string(),
             symptom: "timeout".to_string(),
             expected_behavior: "completes".to_string(),
@@ -231,6 +233,262 @@ fn proposal_idempotency_rejects_revision_changes_with_the_same_key() {
         propose_last_known_good(&root, conflicting).expect_err("revision conflict"),
         "idempotency-conflict"
     );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn proposal_retry_uses_original_request_without_reresolving_head_or_context_memory() {
+    let (root, context, original_revision) = setup();
+    let request = proposal(&context, "HEAD", "stable-head-request");
+    let first = propose_last_known_good(&root, request.clone()).expect("first proposal");
+    assert_eq!(first.git_revision, original_revision);
+
+    append_diagnostic_assertion(
+        &root,
+        crate::model::DiagnosticAssertion {
+            schema_version: crate::model::DIAGNOSTIC_ASSERTION_SCHEMA.to_string(),
+            id: "memory-after-proposal".to_string(),
+            context_id: context.id.clone(),
+            revision: 0,
+            kind: "observation".to_string(),
+            status: "proposed".to_string(),
+            actor: "agent".to_string(),
+            statement: "Engineering memory advanced without redefining the Context.".to_string(),
+            evidence: Vec::new(),
+            supersedes: None,
+            created_at: 0,
+        },
+    )
+    .expect("append memory");
+    fs::write(root.join("src/revision.ts"), "export const revision = 2;").expect("source");
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "advance head"]);
+
+    let retried = propose_last_known_good(&root, request).expect("idempotent retry");
+    assert_eq!(retried, first);
+    let current_context = get_diagnostic_context(&root, &context.id).expect("context");
+    assert_eq!(current_context.memory_revision, 1);
+    assert_eq!(
+        current_context.context_basis_fingerprint,
+        context.context_basis_fingerprint
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn transition_retry_returns_original_event_after_lifecycle_tip_advances() {
+    let (root, context, revision) = setup();
+    propose_last_known_good(&root, proposal(&context, &revision, "transition-p1"))
+        .expect("proposal");
+    let pending = get_last_known_good_protocol(&root, &context.id).expect("pending");
+    let confirm_request = transition(&context, &pending, "transition-c1");
+    let confirmed = confirm_last_known_good_local(&root, confirm_request.clone()).expect("confirm");
+    let active = get_last_known_good_protocol(&root, &context.id).expect("active");
+    let mut replacement = proposal(&context, &revision, "transition-p2");
+    replacement.expected_tip_event_id = active.tip_event_id;
+    propose_last_known_good(&root, replacement).expect("replacement proposal");
+
+    let retried = confirm_last_known_good_local(&root, confirm_request).expect("retry confirm");
+    assert_eq!(retried, confirmed);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn missing_or_corrupt_command_receipt_fails_closed() {
+    let (root, context, revision) = setup();
+    let request = proposal(&context, &revision, "receipt-corruption");
+    propose_last_known_good(&root, request.clone()).expect("proposal");
+    let connection = open(&root).expect("database");
+    connection
+        .execute(
+            "UPDATE last_known_good_command_receipts
+             SET result_candidate_id = NULL
+             WHERE context_id = ?1 AND idempotency_key = ?2",
+            rusqlite::params![context.id, request.idempotency_key],
+        )
+        .expect("corrupt receipt");
+    drop(connection);
+    assert_eq!(
+        propose_last_known_good(&root, request.clone()).expect_err("corrupt result"),
+        "lkg-idempotency-result-unavailable"
+    );
+
+    let connection = open(&root).expect("database");
+    connection
+        .execute(
+            "DELETE FROM last_known_good_command_receipts
+             WHERE context_id = ?1 AND idempotency_key = ?2",
+            rusqlite::params![context.id, request.idempotency_key],
+        )
+        .expect("remove receipt");
+    drop(connection);
+    assert_eq!(
+        propose_last_known_good(&root, request).expect_err("legacy replay"),
+        "legacy-lkg-idempotency-replay-unavailable"
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn engineering_memory_does_not_invalidate_lkg_but_definition_changes_do() {
+    let (root, context, revision) = setup();
+    let candidate = propose_last_known_good(&root, proposal(&context, &revision, "memory-p1"))
+        .expect("proposal");
+    let pending = get_last_known_good_protocol(&root, &context.id).expect("pending");
+    confirm_last_known_good_local(&root, transition(&context, &pending, "memory-c1"))
+        .expect("confirm");
+
+    for (index, kind) in [
+        "observation",
+        "hypothesis",
+        "finding",
+        "remediation",
+        "verification",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        append_diagnostic_assertion(
+            &root,
+            crate::model::DiagnosticAssertion {
+                schema_version: crate::model::DIAGNOSTIC_ASSERTION_SCHEMA.to_string(),
+                id: format!("memory-{index}"),
+                context_id: context.id.clone(),
+                revision: 0,
+                kind: kind.to_string(),
+                status: "proposed".to_string(),
+                actor: "agent".to_string(),
+                statement: format!("{kind} engineering memory"),
+                evidence: Vec::new(),
+                supersedes: None,
+                created_at: 0,
+            },
+        )
+        .expect("append assertion");
+        let state = get_last_known_good_protocol(&root, &context.id).expect("state");
+        assert_eq!(state.lifecycle_status, "active");
+        assert_eq!(state.applicability_status, "applicable");
+    }
+    let mut redefined = get_diagnostic_context(&root, &context.id).expect("Context");
+    assert_eq!(redefined.memory_revision, 5);
+    assert_eq!(
+        redefined.context_basis_fingerprint,
+        candidate.context_basis_fingerprint
+    );
+    redefined.expected_behavior = "a newly defined outcome".to_string();
+    redefined.context_definition_revision += 1;
+    redefined.context_basis_fingerprint =
+        crate::model::diagnostic_context_basis_fingerprint(&redefined);
+    let payload = serde_json::to_string(&redefined).expect("Context payload");
+    let connection = open(&root).expect("database");
+    connection
+        .execute(
+            "UPDATE diagnostic_contexts
+             SET context_definition_revision = ?1, context_basis_fingerprint = ?2,
+                 payload_json = ?3 WHERE id = ?4",
+            rusqlite::params![
+                redefined.context_definition_revision,
+                redefined.context_basis_fingerprint,
+                payload,
+                redefined.id
+            ],
+        )
+        .expect("redefine Context fixture");
+    drop(connection);
+    let state = get_last_known_good_protocol(&root, &context.id).expect("redefined state");
+    assert_eq!(state.lifecycle_status, "active");
+    assert_eq!(state.applicability_status, "context-basis-mismatch");
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn history_uses_predecessor_order_and_reports_zero_and_bounded_omissions() {
+    let (root, context, revision) = setup();
+    propose_last_known_good(&root, proposal(&context, &revision, "history-p1")).expect("proposal");
+    let pending = get_last_known_good_protocol(&root, &context.id).expect("pending");
+    confirm_last_known_good_local(&root, transition(&context, &pending, "history-c1"))
+        .expect("confirm");
+    let active = get_last_known_good_protocol(&root, &context.id).expect("active");
+    let mut replacement = proposal(&context, &revision, "history-p2");
+    replacement.expected_tip_event_id = active.tip_event_id;
+    propose_last_known_good(&root, replacement).expect("replacement");
+    let pending = get_last_known_good_protocol(&root, &context.id).expect("pending");
+    reject_last_known_good_local(&root, transition(&context, &pending, "history-r2"))
+        .expect("reject");
+    let connection = open(&root).expect("database");
+    connection
+        .execute(
+            "UPDATE last_known_good_events SET created_at = 100 WHERE context_id = ?1",
+            rusqlite::params![context.id],
+        )
+        .expect("same-second history");
+    drop(connection);
+
+    let full = list_last_known_good_protocol(&root, &context.id, 128).expect("history");
+    assert_eq!(
+        full.events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        ["PROPOSE", "CONFIRM", "PROPOSE", "REJECT"]
+    );
+    let bounded = list_last_known_good_protocol(&root, &context.id, 2).expect("bounded");
+    assert_eq!(bounded.total_events, 4);
+    assert!(bounded.truncated);
+    assert_eq!(bounded.events.len(), 2);
+    assert_eq!(bounded.events[0].event_type, "PROPOSE");
+    assert_eq!(bounded.events[1].event_type, "REJECT");
+    let zero = list_last_known_good_protocol(&root, &context.id, 0).expect("zero");
+    assert!(zero.events.is_empty());
+    assert_eq!(zero.total_events, 4);
+    assert!(zero.truncated);
+    assert!(!zero.omissions.is_empty());
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn diagnosis_preserves_active_but_out_of_lineage_candidate() {
+    let (root, context, revision) = setup();
+    propose_last_known_good(&root, proposal(&context, &revision, "diagnosis-p1"))
+        .expect("proposal");
+    let pending = get_last_known_good_protocol(&root, &context.id).expect("pending");
+    confirm_last_known_good_local(&root, transition(&context, &pending, "diagnosis-c1"))
+        .expect("confirm");
+    git(&root, &["checkout", "--orphan", "divergent"]);
+    fs::write(
+        root.join("src/divergent.ts"),
+        "export const divergent = true;",
+    )
+    .expect("source");
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "divergent root"]);
+    let (snapshot, facts) = crate::graph::build(&root).expect("divergent graph");
+    persist_scan(&root, snapshot, &facts).expect("divergent scan");
+
+    let diagnosis = crate::diagnostic::diagnose_history(
+        &root,
+        &context.id,
+        crate::model::DiagnosticLimits::default(),
+    )
+    .expect("diagnosis");
+    assert_eq!(diagnosis.last_known_good_status, "confirmed-inapplicable");
+    assert_eq!(
+        diagnosis
+            .last_known_good_applicability
+            .as_ref()
+            .map(|value| value.status.as_str()),
+        Some("out-of-lineage")
+    );
+    assert!(diagnosis.last_known_good_candidate.is_some());
+    assert_eq!(
+        diagnosis
+            .last_known_good_state
+            .as_ref()
+            .map(|value| value.lifecycle_status.as_str()),
+        Some("active")
+    );
+    assert!(diagnosis.range.is_none());
+    assert!(diagnosis.candidates.is_empty());
     fs::remove_dir_all(root).expect("cleanup");
 }
 
@@ -474,10 +732,10 @@ fn protocol_diagnosis_does_not_synthesize_confirmer_from_proposer() {
     confirm_last_known_good_local(&root, transition(&context, &pending, "attribution-confirm"))
         .expect("human confirmation");
     let events = list_last_known_good_protocol(&root, &context.id, 16).expect("history");
-    assert_eq!(events[0].actor, "agent");
-    assert_eq!(events[0].actor_kind, "agent-or-tool");
-    assert_eq!(events[1].actor, "human-reviewer");
-    assert_eq!(events[1].actor_kind, "human");
+    assert_eq!(events.events[0].actor, "agent");
+    assert_eq!(events.events[0].actor_kind, "agent-or-tool");
+    assert_eq!(events.events[1].actor, "human-reviewer");
+    assert_eq!(events.events[1].actor_kind, "human");
     let diagnosis = crate::diagnostic::diagnose_history(
         &root,
         &context.id,
@@ -545,7 +803,8 @@ fn pure_reducer_rejects_confirmation_without_pending_candidate() {
         repository_id: "repo_test".to_string(),
         project_id: "project_test".to_string(),
         context_id: "context-direct".to_string(),
-        context_revision: 0,
+        context_definition_revision: 0,
+        context_basis_fingerprint: "sha256:test-context".to_string(),
         expected_behavior_fingerprint: "sha256:test".to_string(),
         git_revision: "0123456789012345678901234567890123456789".to_string(),
         observation_id: None,
