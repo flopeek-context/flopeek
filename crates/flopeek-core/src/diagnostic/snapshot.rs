@@ -3,6 +3,12 @@
 #[allow(unused_imports)]
 use super::*;
 
+pub(crate) struct HistoricalGraphMaterialization {
+    pub graph: crate::model::GraphSnapshot,
+    pub facts: Vec<crate::model::TypeScriptFacts>,
+    pub repository_identity_id: Option<String>,
+}
+
 pub(super) fn load_or_build_historical_snapshot(
     root: &Path,
     revision: &str,
@@ -40,11 +46,11 @@ pub(super) fn load_or_build_historical_snapshot(
     Ok(snapshot)
 }
 
-pub(super) fn build_historical_snapshot(
+pub(crate) fn build_historical_graph_materialization(
     root: &Path,
     revision: &str,
     limits: &DiagnosticLimits,
-) -> Result<HistoricalSnapshot, String> {
+) -> Result<HistoricalGraphMaterialization, String> {
     let paths = git_tree_paths(root, revision)?;
     let temporary = std::env::temp_dir().join(format!(
         "flopeek-history-{}-{}",
@@ -155,7 +161,7 @@ pub(super) fn build_historical_snapshot(
         .map_err(|error| format!("historical-repository-identity-invalid: {error}"));
     let built = crate::graph::build(&temporary);
     let _ = fs::remove_dir_all(&temporary);
-    let (mut graph_snapshot, _) = built?;
+    let (mut graph_snapshot, facts) = built?;
     let historical_identity = historical_identity?;
     graph_snapshot.project_id = crate::graph::project_id(root);
     for flow in &mut graph_snapshot.flows {
@@ -170,11 +176,25 @@ pub(super) fn build_historical_snapshot(
     graph_snapshot.graph_version = 0;
     graph_snapshot.truncated |= truncated;
     graph_snapshot.omissions.extend(omissions);
+    Ok(HistoricalGraphMaterialization {
+        graph: graph_snapshot,
+        facts,
+        repository_identity_id: historical_identity.repository_id,
+    })
+}
+
+pub(super) fn build_historical_snapshot(
+    root: &Path,
+    revision: &str,
+    limits: &DiagnosticLimits,
+) -> Result<HistoricalSnapshot, String> {
+    let materialized = build_historical_graph_materialization(root, revision, limits)?;
+    let graph_snapshot = materialized.graph;
     Ok(HistoricalSnapshot {
         schema_version: HISTORICAL_SNAPSHOT_SCHEMA.to_string(),
         project_id: graph_snapshot.project_id,
         source_revision: revision.to_string(),
-        repository_identity_id: historical_identity.repository_id,
+        repository_identity_id: materialized.repository_identity_id,
         evidence_contract: Some(crate::model::EvidenceContract {
             graph_schema_version: crate::model::GRAPH_SCHEMA.to_string(),
             graph_derivation_id: crate::graph::GRAPH_DERIVATION_ID.to_string(),

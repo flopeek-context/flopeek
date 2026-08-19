@@ -390,6 +390,7 @@ pub fn validate_last_known_good(
     Ok(binding)
 }
 
+#[allow(dead_code)]
 pub(crate) fn confirmed_last_known_good(
     root: &Path,
     context_id: &str,

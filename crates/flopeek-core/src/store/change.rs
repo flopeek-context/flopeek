@@ -349,6 +349,94 @@ fn load_observation(
     }))
 }
 
+/// Compare two persisted observations without treating the pair as a Git
+/// parent/child relation.  LKG review uses this bounded structural comparison
+/// to show candidate-to-current evidence; the normal public delta endpoint
+/// continues to require an adjacent observation event.
+pub(crate) fn compare_observation_ids(
+    connection: &Connection,
+    project_id: &str,
+    from_observation_id: &str,
+    to_observation_id: &str,
+    limits: DeltaLimits,
+) -> Result<ObservationDelta, String> {
+    let from = match load_observation(connection, from_observation_id) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Ok(unavailable_delta(
+                project_id,
+                "candidate-observation-unavailable",
+                None,
+                None,
+                None,
+                false,
+            ));
+        }
+        Err(error) if error.starts_with("observation-source-manifest-invalid") => {
+            return Ok(unavailable_delta(
+                project_id,
+                "observation-source-manifest-invalid",
+                None,
+                None,
+                None,
+                false,
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    let to = match load_observation(connection, to_observation_id) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Ok(unavailable_delta(
+                project_id,
+                "current-observation-unavailable",
+                None,
+                Some(from.basis),
+                Some(from.contract),
+                false,
+            ));
+        }
+        Err(error) if error.starts_with("observation-source-manifest-invalid") => {
+            return Ok(unavailable_delta(
+                project_id,
+                "observation-source-manifest-invalid",
+                None,
+                Some(from.basis),
+                Some(from.contract),
+                false,
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    if from.basis.project_id != project_id || to.basis.project_id != project_id {
+        return Ok(unavailable_delta(
+            project_id,
+            "wrong-project-observation",
+            None,
+            Some(to.basis),
+            Some(to.contract),
+            true,
+        ));
+    }
+    let mut delta = temporal::compare_observations(
+        project_id,
+        from_observation_id,
+        to_observation_id,
+        &from,
+        &to,
+        &limits,
+    );
+    delta.from_event_id = None;
+    delta.to_event_id = None;
+    delta.limitations.push(
+        "LKG candidate-to-current comparison is observation evidence, not Git ancestry or runtime order."
+            .to_string(),
+    );
+    delta.limitations.sort();
+    delta.limitations.dedup();
+    Ok(delta)
+}
+
 fn unavailable_delta(
     project_id: &str,
     reason: &str,

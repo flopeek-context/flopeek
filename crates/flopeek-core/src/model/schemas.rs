@@ -7,18 +7,18 @@
 use serde::{Deserialize, Serialize};
 
 pub const PRODUCT_IDENTITY: &str = "flopeek-repository-memory";
-pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v9";
+pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v10";
 pub const GRAPH_SCHEMA: &str = "flopeek-graph/v7";
 pub const CONTEXT_REF_SCHEMA: &str = "flopeek-context-ref/v4";
-pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v13";
-pub const STORE_SCHEMA: &str = "flopeek-sqlite/v9";
+pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v14";
+pub const STORE_SCHEMA: &str = "flopeek-sqlite/v10";
 pub const TYPESCRIPT_FACTS_SCHEMA: &str = "flopeek-typescript-facts/v4";
 pub const TYPESCRIPT_RESOLUTION_SCHEMA: &str = "flopeek-typescript-resolution/v3";
-pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v5";
+pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v6";
 pub const DIAGNOSTIC_ASSERTION_SCHEMA: &str = "flopeek-diagnostic-assertion/v2";
 pub const HISTORICAL_CANDIDATE_SCHEMA: &str = "flopeek-historical-candidate/v5";
-pub const HISTORICAL_DIAGNOSIS_SCHEMA: &str = "flopeek-historical-diagnosis/v5";
-pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v8";
+pub const HISTORICAL_DIAGNOSIS_SCHEMA: &str = "flopeek-historical-diagnosis/v6";
+pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v9";
 pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v7";
 pub const ENTRY_EVIDENCE_SCHEMA: &str = "flopeek-entry-evidence/v1";
 pub const CONTEXT_FLOW_SCHEMA: &str = "flopeek-context-flow/v1";

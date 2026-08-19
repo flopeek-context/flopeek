@@ -19,13 +19,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_DIRECTORY: &str = ".flopeek";
 pub const STORE_FILENAME: &str = "flopeek.sqlite3";
-pub const CURRENT_USER_VERSION: i64 = 11;
+pub const CURRENT_USER_VERSION: i64 = 12;
 
 mod change;
 mod continuity;
 mod graph_validation;
 mod last_known_good;
 mod last_known_good_validation;
+mod lkg_protocol;
 mod memory;
 mod migrations;
 mod observation;
@@ -36,10 +37,17 @@ mod tests;
 
 pub use change::get_observation_delta;
 pub use continuity::{get_observation_continuity, reconcile_context};
+#[allow(unused_imports)]
 pub(crate) use last_known_good::confirmed_last_known_good;
 pub use last_known_good::{
     create_last_known_good_binding, get_last_known_good, list_last_known_good_history,
     validate_last_known_good,
+};
+pub(crate) use lkg_protocol::confirmed_protocol_candidate;
+pub use lkg_protocol::{
+    confirm_last_known_good_local, get_last_known_good_protocol, get_last_known_good_review_packet,
+    list_last_known_good_protocol, propose_last_known_good, reject_last_known_good_local,
+    revoke_last_known_good_local, validate_last_known_good_protocol,
 };
 use memory::now_seconds;
 pub(crate) use memory::now_seconds_for_sql;

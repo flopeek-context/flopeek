@@ -260,3 +260,5 @@ pub(crate) fn migration_v11(transaction: &Transaction<'_>) -> Result<(), String>
     }
     Ok(())
 }
+
+include!("last_known_good_v12.rs");
