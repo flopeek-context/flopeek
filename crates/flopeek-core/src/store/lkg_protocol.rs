@@ -17,4 +17,4 @@ pub use implementation::{
     revoke_last_known_good_local, validate_last_known_good_protocol,
 };
 
-pub(crate) use implementation::confirmed_protocol_candidate;
+pub(crate) use implementation::active_protocol_evaluation;

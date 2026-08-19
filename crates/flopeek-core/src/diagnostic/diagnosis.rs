@@ -23,22 +23,39 @@ pub fn diagnose_history(
         "Historical candidates are deterministic path/topology relevance signals, not runtime causes or root-cause findings.".to_string(),
         "Runtime execution, dynamic dispatch, reflection, generated code and business intent remain unavailable.".to_string(),
     ];
-    let protocol_candidate = store::confirmed_protocol_candidate(root, context_id)?;
-    let protocol_state = Some(store::get_last_known_good_protocol(root, context_id)?);
-    let protocol_applicability =
-        protocol_candidate
-            .as_ref()
-            .map(|_| crate::model::LastKnownGoodApplicability {
-                status: "applicable".to_string(),
-                limitations: Vec::new(),
-            });
-    let Some(confirmed_candidate) = protocol_candidate.clone() else {
-        limitations.push(if context.last_known_good_basis.is_some() {
-            "legacy last-known-good basis is legacy-unbound; no historical range was inspected."
-                .to_string()
+    let evaluation = store::active_protocol_evaluation(root, context_id)?;
+    let protocol_candidate = evaluation.candidate.clone();
+    let protocol_state = Some(evaluation.state.clone());
+    let protocol_applicability = evaluation.applicability.clone();
+    if !evaluation.usable_for_diagnosis {
+        let status = if protocol_candidate.is_some() {
+            let applicability = protocol_applicability
+                .as_ref()
+                .map(|value| value.status.as_str())
+                .unwrap_or("unavailable");
+            limitations.push(format!(
+                "active last-known-good is confirmed but cannot be applied to historical diagnosis: {applicability}."
+            ));
+            "confirmed-inapplicable"
+        } else if evaluation.state.lifecycle_status == "corrupt" {
+            limitations.push(
+                "last-known-good lifecycle is corrupt; no historical range was inspected."
+                    .to_string(),
+            );
+            "corrupt"
+        } else if context.last_known_good_basis.is_some() {
+            limitations.push(
+                "legacy last-known-good basis is legacy-unbound; no historical range was inspected."
+                    .to_string(),
+            );
+            "legacy-unbound"
         } else {
-            "last-known-good basis is unavailable; no historical range was inspected.".to_string()
-        });
+            limitations.push(
+                "last-known-good basis is unavailable; no historical range was inspected."
+                    .to_string(),
+            );
+            "unavailable"
+        };
         return Ok(HistoricalDiagnosis {
             schema_version: HISTORICAL_DIAGNOSIS_SCHEMA.to_string(),
             context_id: context.id,
@@ -48,11 +65,7 @@ pub fn diagnose_history(
             last_known_good_candidate: protocol_candidate.clone(),
             last_known_good_state: protocol_state.clone(),
             last_known_good_applicability: protocol_applicability.clone(),
-            last_known_good_status: if context.last_known_good_basis.is_some() {
-                "legacy-unbound".to_string()
-            } else {
-                "unavailable".to_string()
-            },
+            last_known_good_status: status.to_string(),
             range: None,
             commits_inspected: 0,
             candidates: Vec::new(),
@@ -60,7 +73,10 @@ pub fn diagnose_history(
             omissions: Vec::new(),
             limitations,
         });
-    };
+    }
+    let confirmed_candidate = protocol_candidate
+        .clone()
+        .ok_or_else(|| "active applicable LKG candidate is unavailable".to_string())?;
 
     let last_known_good = GitBasis {
         revision: confirmed_candidate.git_revision.clone(),

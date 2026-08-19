@@ -76,15 +76,56 @@ pub fn get_last_known_good_protocol(root: &Path, context_id: &str) -> Result<Las
     Ok(state)
 }
 
-pub fn list_last_known_good_protocol(root: &Path, context_id: &str, limit: usize) -> Result<Vec<LastKnownGoodEvent>, String> {
+pub fn list_last_known_good_protocol(
+    root: &Path,
+    context_id: &str,
+    limit: usize,
+) -> Result<LastKnownGoodHistory, String> {
     let connection = open(root)?;
-    let mut statement = connection.prepare(
-        "SELECT payload_json FROM last_known_good_events WHERE context_id = ?1 ORDER BY created_at, event_id LIMIT ?2",
-    ).map_err(|error| format!("Unable to prepare LKG history query: {error}"))?;
-    statement.query_map(params![context_id, limit.min(1024) as i64], |row| row.get::<_, String>(0))
-        .map_err(|error| format!("Unable to query LKG history: {error}"))?
-        .map(|row| row.map_err(|error| format!("Unable to read LKG event: {error}")).and_then(|payload| decode(&payload, "LastKnownGoodEvent")))
-        .collect()
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| format!("Unable to read LKG history: {error}"))?;
+    let lifecycle = match reduced(&transaction, context_id) {
+        Ok((_, lifecycle)) => lifecycle,
+        Err(reason) => {
+            transaction.rollback().ok();
+            return Ok(LastKnownGoodHistory {
+                schema_version: LKG_HISTORY_SCHEMA.to_string(),
+                status: "unavailable".to_string(),
+                reason: Some(reason.clone()),
+                context_id: context_id.to_string(),
+                tip_event_id: None,
+                total_events: 0,
+                events: Vec::new(),
+                truncated: false,
+                omissions: Vec::new(),
+                limitations: vec![reason],
+            });
+        }
+    };
+    transaction.rollback().ok();
+    let hard_limit = limit.min(1_024);
+    let total_events = lifecycle.events.len();
+    let omitted = total_events.saturating_sub(hard_limit);
+    let events = lifecycle.events.into_iter().skip(omitted).collect();
+    Ok(LastKnownGoodHistory {
+        schema_version: LKG_HISTORY_SCHEMA.to_string(),
+        status: "complete".to_string(),
+        reason: None,
+        context_id: context_id.to_string(),
+        tip_event_id: lifecycle.state.tip_event_id,
+        total_events,
+        events,
+        truncated: omitted > 0,
+        omissions: (omitted > 0)
+            .then(|| format!("{omitted} earlier LKG events omitted by history limit"))
+            .into_iter()
+            .collect(),
+        limitations: vec![
+            "LKG history order follows predecessorEventId; createdAt is display metadata only."
+                .to_string(),
+        ],
+    })
 }
 
 pub fn validate_last_known_good_protocol(root: &Path, context_id: &str) -> Result<LastKnownGoodState, String> {
@@ -160,27 +201,58 @@ pub fn get_last_known_good_review_packet(root: &Path, context_id: &str) -> Resul
     })
 }
 
-pub(crate) fn confirmed_protocol_candidate(root: &Path, context_id: &str) -> Result<Option<LastKnownGoodCandidate>, String> {
+pub(crate) struct ActiveProtocolEvaluation {
+    pub candidate: Option<LastKnownGoodCandidate>,
+    pub state: LastKnownGoodState,
+    pub applicability: Option<LastKnownGoodApplicability>,
+    pub usable_for_diagnosis: bool,
+}
+
+pub(crate) fn active_protocol_evaluation(
+    root: &Path,
+    context_id: &str,
+) -> Result<ActiveProtocolEvaluation, String> {
     let materialized = get_last_known_good_protocol(root, context_id)?;
     if materialized.lifecycle_status == "corrupt" {
-        return Ok(None);
+        return Ok(ActiveProtocolEvaluation {
+            candidate: None,
+            state: materialized,
+            applicability: None,
+            usable_for_diagnosis: false,
+        });
     }
     let connection = open(root)?;
     let transaction = connection.unchecked_transaction().map_err(|error| format!("Unable to inspect active LKG: {error}"))?;
     let (candidates, reduced) = reduced(&transaction, context_id)?;
-    let Some(active) = reduced.state.active_candidate_id else { transaction.rollback().ok(); return Ok(None) };
+    let Some(active) = reduced.state.active_candidate_id else {
+        transaction.rollback().ok();
+        return Ok(ActiveProtocolEvaluation {
+            candidate: None,
+            state: materialized,
+            applicability: None,
+            usable_for_diagnosis: false,
+        });
+    };
     let candidate = candidates.into_iter().find(|value| value.candidate_id == active);
-    let candidate = if let Some(candidate) = candidate {
+    let applicability = if let Some(candidate) = candidate.as_ref() {
         let context = context_snapshot(&transaction, context_id)?;
-        let applicability = evaluate_applicability(&transaction, root, &candidate, &context)?;
-        (candidate.integrity.status == LKG_INTEGRITY_COMPLETE
-            && applicability.status == "applicable")
-            .then_some(candidate)
+        Some(evaluate_applicability(&transaction, root, candidate, &context)?)
     } else {
         None
     };
     transaction.rollback().ok();
-    Ok(candidate.filter(|value| value.integrity.status == LKG_INTEGRITY_COMPLETE))
+    let usable_for_diagnosis = candidate
+        .as_ref()
+        .is_some_and(|value| value.integrity.status == LKG_INTEGRITY_COMPLETE)
+        && applicability
+            .as_ref()
+            .is_some_and(|value| value.status == "applicable");
+    Ok(ActiveProtocolEvaluation {
+        candidate,
+        state: materialized,
+        applicability,
+        usable_for_diagnosis,
+    })
 }
 
 pub(crate) fn evaluate_applicability(
@@ -199,13 +271,14 @@ pub(crate) fn evaluate_applicability(
             limitations: vec!["repository-identity-mismatch".to_string()],
         });
     }
-    if candidate.context_revision != context.revision
+    if candidate.context_definition_revision != context.context_definition_revision
+        || candidate.context_basis_fingerprint != context.context_basis_fingerprint
         || candidate.expected_behavior_fingerprint
             != crate::model::expected_behavior_fingerprint(&context.expected_behavior)
     {
         return Ok(LastKnownGoodApplicability {
-            status: "context-revision-mismatch".to_string(),
-            limitations: vec!["diagnostic-context-revision-or-expected-behavior-changed".to_string()],
+            status: "context-basis-mismatch".to_string(),
+            limitations: vec!["diagnostic-context-definition-or-expected-behavior-changed".to_string()],
         });
     }
     if candidate.integrity.status != LKG_INTEGRITY_COMPLETE {
