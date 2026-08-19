@@ -7,6 +7,10 @@ pub fn create_diagnostic_context(
     root: &Path,
     mut context: crate::model::DiagnosticContext,
 ) -> Result<crate::model::DiagnosticContext, String> {
+    context.context_definition_revision = 1;
+    context.memory_revision = 0;
+    context.context_basis_fingerprint =
+        crate::model::diagnostic_context_basis_fingerprint(&context);
     crate::diagnostic::validate_context(&context)?;
     let project_id = crate::graph::project_id(root);
     if context.project_id != project_id || context.current_graph_basis.project_id != project_id {
@@ -66,7 +70,6 @@ pub fn create_diagnostic_context(
             );
         }
     }
-    context.revision = 1;
     if context.created_at == 0 {
         context.created_at = now_seconds() as u64;
     }
@@ -74,12 +77,17 @@ pub fn create_diagnostic_context(
         .map_err(|error| format!("Unable to encode Diagnostic Context: {error}"))?;
     transaction
         .execute(
-            "INSERT INTO diagnostic_contexts(id, project_id, revision, payload_json, created_at)
-             VALUES(?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO diagnostic_contexts(
+                 id, project_id, revision, context_definition_revision,
+                 context_basis_fingerprint, memory_revision, payload_json, created_at
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 context.id,
                 context.project_id,
-                context.revision,
+                context.context_definition_revision,
+                context.context_definition_revision,
+                context.context_basis_fingerprint,
+                context.memory_revision,
                 payload,
                 context.created_at as i64
             ],
@@ -109,9 +117,6 @@ pub fn get_diagnostic_context(
     let context = serde_json::from_str::<crate::model::DiagnosticContext>(&payload)
         .map_err(|error| format!("Diagnostic Context {context_id} is corrupted: {error}"))?;
     crate::diagnostic::validate_context(&context)?;
-    if context.revision == 0 {
-        return Err("Diagnostic Context has a zero revision.".to_string());
-    }
     Ok(context)
 }
 
@@ -182,8 +187,8 @@ pub fn append_diagnostic_assertion(
     }
     let expected_revision = transaction
         .query_row(
-            "SELECT COALESCE(MAX(revision), ?2) + 1 FROM diagnostic_assertions WHERE context_id = ?1",
-            params![assertion.context_id, context.revision],
+            "SELECT COALESCE(MAX(revision), 0) + 1 FROM diagnostic_assertions WHERE context_id = ?1",
+            params![assertion.context_id],
             |row| row.get::<_, i64>(0),
         )
         .map_err(|error| format!("Unable to allocate Diagnostic Assertion revision: {error}"))?
@@ -233,14 +238,14 @@ pub fn append_diagnostic_assertion(
         )
         .map_err(|error| format!("Unable to persist Diagnostic Assertion: {error}"))?;
     let mut updated_context = context;
-    updated_context.revision = assertion.revision;
+    updated_context.memory_revision = assertion.revision;
     let updated_payload = serde_json::to_string(&updated_context)
         .map_err(|error| format!("Unable to encode updated Diagnostic Context: {error}"))?;
     transaction
         .execute(
-            "UPDATE diagnostic_contexts SET revision = ?1, payload_json = ?2 WHERE id = ?3",
+            "UPDATE diagnostic_contexts SET memory_revision = ?1, payload_json = ?2 WHERE id = ?3",
             params![
-                updated_context.revision,
+                updated_context.memory_revision,
                 updated_payload,
                 updated_context.id
             ],

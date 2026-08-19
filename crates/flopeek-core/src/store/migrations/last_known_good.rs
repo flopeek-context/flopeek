@@ -262,3 +262,4 @@ pub(crate) fn migration_v11(transaction: &Transaction<'_>) -> Result<(), String>
 }
 
 include!("last_known_good_v12.rs");
+include!("diagnostic_context_v13.rs");

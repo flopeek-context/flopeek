@@ -90,6 +90,13 @@ pub fn validate_context(context: &DiagnosticContext) -> Result<(), String> {
     }
     validate_id("Diagnostic Context id", &context.id)?;
     validate_id("Diagnostic Context project id", &context.project_id)?;
+    if context.context_definition_revision == 0 {
+        return Err("Diagnostic Context definition revision must be positive.".to_string());
+    }
+    let expected_fingerprint = crate::model::diagnostic_context_basis_fingerprint(context);
+    if context.context_basis_fingerprint != expected_fingerprint {
+        return Err("Diagnostic Context basis fingerprint is invalid.".to_string());
+    }
     validate_choice("intent", &context.intent, ALLOWED_INTENTS)?;
     validate_choice("status", &context.status, ALLOWED_CONTEXT_STATUSES)?;
     validate_text("symptom", &context.symptom)?;

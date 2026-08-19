@@ -246,13 +246,12 @@ pub fn create_last_known_good_binding(
         .map_err(|error| format!("Diagnostic Context is corrupted: {error}"))?;
     if context.last_known_good_binding_id != effective_binding_id {
         context.last_known_good_binding_id = effective_binding_id;
-        context.revision = context.revision.saturating_add(1);
         let updated_payload = serde_json::to_string(&context)
             .map_err(|error| format!("Unable to encode updated Diagnostic Context: {error}"))?;
         transaction
             .execute(
-                "UPDATE diagnostic_contexts SET revision = ?1, payload_json = ?2 WHERE id = ?3",
-                params![context.revision, updated_payload, binding.context_id],
+                "UPDATE diagnostic_contexts SET payload_json = ?1 WHERE id = ?2",
+                params![updated_payload, binding.context_id],
             )
             .map_err(|error| format!("Unable to update effective last-known-good: {error}"))?;
     }
