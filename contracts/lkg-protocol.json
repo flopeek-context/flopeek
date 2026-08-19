@@ -9,6 +9,12 @@
   "reviewPacket": {
     "schemaVersion": "flopeek-last-known-good-review-packet/v1",
     "includes": ["context", "candidate", "state", "applicability", "candidate-to-current-structural-delta", "confirmability"],
+    "candidateSelection": "pending-first-otherwise-active",
+    "applicabilitySemantics": {
+      "packetApplicability": "selected-review-candidate",
+      "stateApplicability": "effective-state-active-first-otherwise-pending",
+      "stateReduction": "complete-context-candidate-and-event-stream"
+    },
     "sourceBody": false,
     "runtimeClaims": false,
     "causalClaims": false
@@ -45,6 +51,32 @@
     "CONFIRM": "targets-pending-and-optionally-replaces-active",
     "REJECT": "targets-pending-and-preserves-active",
     "REVOKE": "targets-active-and-clears-active"
+  },
+  "confirmation": {
+    "requiresPendingCandidate": true,
+    "directConfirmation": false,
+    "invalidReason": "lkg-confirm-target-not-pending"
+  },
+  "graphReuse": {
+    "structuralCompatibility": [
+      "graph-metadata-and-evidence-contract",
+      "canonical-resolution-entry-related-test-evidence",
+      "nodes",
+      "edges",
+      "flows"
+    ],
+    "exactSourceAuthority": "graph_observations.source_manifest_json",
+    "exactSourceExcludedFromReuse": [
+      "bytes",
+      "raw-source-hash",
+      "source-hash",
+      "source-position",
+      "serialized-facts"
+    ]
+  },
+  "compatibility": {
+    "protocolBindingSynthesis": false,
+    "confirmerAttribution": "confirm-event-only"
   },
   "validation": {
     "integrity": ["complete", "partial", "invalid"],

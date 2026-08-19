@@ -412,10 +412,28 @@ The reducer accepts only `PROPOSE`, `CONFIRM`, `REJECT`, and `REVOKE`; `SUPERSED
 is forbidden. There is at most one pending and one active candidate. A proposal
 does not change active state; rejection preserves active state; revocation clears
 it; replacement confirmation targets the pending candidate and records the active
-candidate as `replacesCandidateId`. Direct confirmation is allowed only when no
-pending or active candidate exists. `tipEventId` and
+candidate as `replacesCandidateId`. Every confirmation requires a pending
+candidate; direct confirmation is forbidden. `tipEventId` and
 `lastKnownGoodCandidateId` are transactional projections and never advance the
 Diagnostic Context revision.
+
+The LKG Review Packet has two explicit applicability views. Its `applicability`
+belongs to the selected review candidate (pending first, otherwise active), while
+`state.applicabilityStatus` belongs to the effective reduced state (active first,
+otherwise pending). State applicability is always reduced from the complete
+candidate and event stream; a review packet must not reduce a singleton candidate
+slice. Protocol-1.0 diagnosis uses Candidate, Event, and State as its authority
+and does not synthesize a legacy binding that attributes a proposer as a
+confirmer. The compatibility `lastKnownGoodBinding` field is therefore null for
+protocol candidates; actual confirmer attribution remains on the `CONFIRM` event.
+
+Graph reuse and exact observation are separate authorities. Detached historical
+materialization may reuse a graph only after validating structural graph metadata,
+canonical resolution/entry/related-test evidence, nodes, edges, and flows. It must
+not compare exact source bytes, raw source hashes, source positions, or serialized
+facts. Exact historical source belongs to the immutable observation manifest
+(`graph_observations.source_manifest_json`); detached reuse never rewrites the
+canonical graph materialization or current observation state.
 
 Exact revision authority is `graph_observations.git_revision`. The
 `graph_versions.source_revision` column is structural materialization metadata
@@ -1182,7 +1200,7 @@ Strengthen:
 
 Status:
 
-**paused pending LKG Protocol 1.0 conformance merge**
+**paused pending final LKG Protocol 1.0 conformance gate**
 
 Strengthen:
 
