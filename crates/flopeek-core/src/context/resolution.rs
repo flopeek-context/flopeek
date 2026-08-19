@@ -253,7 +253,7 @@ pub fn resolve(
     };
     let mut status = status.to_string();
     let mut freshness_reason = freshness_reason.to_string();
-    let mut successor_uri = None;
+    let successor_uri = None;
     if status == "stale"
         && fingerprint_scope == "ast-and-direct-edges"
         && fingerprint_contract == crate::temporal::NODE_FINGERPRINT_CONTRACT
@@ -304,14 +304,13 @@ pub fn resolve(
             status = "stale".to_string();
             freshness_reason = "exact-successor-ambiguous".to_string();
         } else if let Some((_, uri, scope, contract, fingerprint)) = successors.into_iter().next() {
-            if let Some(uri) = uri {
+            if uri.is_some() {
                 if scope.as_deref() == Some("ast-and-direct-edges")
                     && contract.as_deref() == Some(crate::temporal::NODE_FINGERPRINT_CONTRACT)
                     && fingerprint.as_deref() == Some(origin_fingerprint.as_str())
                 {
-                    status = "superseded".to_string();
-                    freshness_reason = "unique-exact-compatible-fingerprint".to_string();
-                    successor_uri = Some(uri);
+                    status = "stale".to_string();
+                    freshness_reason = "unique-exact-compatible-fingerprint-candidate".to_string();
                 } else {
                     freshness_reason = "successor-ref-unavailable".to_string();
                 }
