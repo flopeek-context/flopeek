@@ -1200,7 +1200,7 @@ Strengthen:
 
 Status:
 
-**paused pending final LKG Protocol 1.0 conformance gate**
+**active**
 
 Strengthen:
 
