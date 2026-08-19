@@ -19,6 +19,8 @@ pub struct LastKnownGoodValidation {
     #[serde(default)]
     pub evidence_contract_compatible: bool,
     #[serde(default)]
+    pub basis_provenance_consistent: bool,
+    #[serde(default)]
     pub limitations: Vec<String>,
 }
 
@@ -45,7 +47,9 @@ pub struct LastKnownGoodBinding {
     #[serde(default)]
     pub predecessor_binding_id: Option<String>,
     #[serde(default)]
-    pub superseded_binding_id: Option<String>,
+    pub target_binding_id: Option<String>,
+    #[serde(default)]
+    pub supersedes_binding_id: Option<String>,
     pub created_at: u64,
     #[serde(default)]
     pub validation: LastKnownGoodValidation,
@@ -76,6 +80,7 @@ pub(crate) struct LastKnownGoodLifecycle {
     pub history: Vec<LastKnownGoodBinding>,
     pub latest_event: Option<LastKnownGoodBinding>,
     pub active_confirmed: Option<LastKnownGoodBinding>,
+    pub pending_proposal: Option<LastKnownGoodBinding>,
 }
 
 pub(crate) fn reduce_last_known_good_lifecycle(
@@ -144,12 +149,113 @@ pub(crate) fn reduce_last_known_good_lifecycle(
     if history.len() != by_id.len() {
         return Err("Last-known-good lifecycle is disconnected.".to_string());
     }
-    let mut active_confirmed = None;
+    let mut active_confirmed: Option<LastKnownGoodBinding> = None;
+    let mut pending_proposal: Option<LastKnownGoodBinding> = None;
     for binding in &history {
+        if binding.status != "confirmed" && binding.supersedes_binding_id.is_some() {
+            return Err(
+                "Only a confirmed binding may supersede an active last-known-good.".to_string(),
+            );
+        }
+        if binding
+            .target_binding_id
+            .as_deref()
+            .is_some_and(|target| target == binding.binding_id)
+            || binding
+                .supersedes_binding_id
+                .as_deref()
+                .is_some_and(|target| target == binding.binding_id)
+        {
+            return Err("A last-known-good binding cannot target itself.".to_string());
+        }
         match binding.status.as_str() {
-            "confirmed" => active_confirmed = Some(binding.clone()),
-            "rejected" | "revoked" | "superseded" => active_confirmed = None,
-            "proposed" => {}
+            "proposed" => {
+                if pending_proposal.is_some() {
+                    return Err(
+                        "Last-known-good lifecycle has multiple pending proposals.".to_string()
+                    );
+                }
+                if binding.target_binding_id.is_some() || binding.supersedes_binding_id.is_some() {
+                    return Err(
+                        "A proposed last-known-good binding cannot target another binding."
+                            .to_string(),
+                    );
+                }
+                pending_proposal = Some(binding.clone());
+            }
+            "confirmed" => {
+                if let Some(target) = binding.target_binding_id.as_deref() {
+                    if pending_proposal
+                        .as_ref()
+                        .map(|value| value.binding_id.as_str())
+                        != Some(target)
+                    {
+                        return Err(
+                            "Last-known-good confirmation target is not the pending proposal."
+                                .to_string(),
+                        );
+                    }
+                } else if pending_proposal.is_some() {
+                    return Err(
+                        "A confirmation with a pending proposal requires targetBindingId."
+                            .to_string(),
+                    );
+                } else if active_confirmed.is_some() {
+                    return Err(
+                        "A direct confirmation cannot replace an active last-known-good."
+                            .to_string(),
+                    );
+                }
+                match (
+                    active_confirmed
+                        .as_ref()
+                        .map(|value| value.binding_id.as_str()),
+                    binding.supersedes_binding_id.as_deref(),
+                ) {
+                    (Some(active), Some(target)) if active == target => {}
+                    (Some(_), _) => {
+                        return Err(
+                            "A replacement confirmation must target the active last-known-good."
+                                .to_string(),
+                        );
+                    }
+                    (None, Some(_)) => {
+                        return Err(
+                            "A confirmation cannot supersede without an active last-known-good."
+                                .to_string(),
+                        );
+                    }
+                    (None, None) => {}
+                }
+                active_confirmed = Some(binding.clone());
+                pending_proposal = None;
+            }
+            "rejected" => {
+                if binding.target_binding_id.as_deref()
+                    != pending_proposal
+                        .as_ref()
+                        .map(|value| value.binding_id.as_str())
+                {
+                    return Err(
+                        "A rejected last-known-good binding must target the pending proposal."
+                            .to_string(),
+                    );
+                }
+                pending_proposal = None;
+            }
+            "revoked" | "superseded" => {
+                if binding.target_binding_id.as_deref()
+                    != active_confirmed
+                        .as_ref()
+                        .map(|value| value.binding_id.as_str())
+                {
+                    return Err(
+                        "A terminal last-known-good event must target the active binding."
+                            .to_string(),
+                    );
+                }
+                active_confirmed = None;
+            }
             _ => {
                 return Err("Last-known-good lifecycle status is corrupted.".to_string());
             }
@@ -159,5 +265,6 @@ pub(crate) fn reduce_last_known_good_lifecycle(
         latest_event: history.last().cloned(),
         history,
         active_confirmed,
+        pending_proposal,
     })
 }
