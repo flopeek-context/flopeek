@@ -114,19 +114,19 @@ mod tests {
             fingerprint
         );
 
-        let mutations: Vec<Box<dyn Fn(&mut DiagnosticContext)>> = vec![
-            Box::new(|value| value.intent = "audit".to_string()),
-            Box::new(|value| value.symptom = "different".to_string()),
-            Box::new(|value| value.expected_behavior = "different".to_string()),
-            Box::new(|value| {
+        let mutations: Vec<fn(&mut DiagnosticContext)> = vec![
+            |value| value.intent = "audit".to_string(),
+            |value| value.symptom = "different".to_string(),
+            |value| value.expected_behavior = "different".to_string(),
+            |value| {
                 value
                     .focus_context_refs
                     .push("fp://local/project/node/c".to_string())
-            }),
-            Box::new(|value| value.focus_flow_refs.clear()),
-            Box::new(|value| value.constraints.push("offline".to_string())),
-            Box::new(|value| value.acceptance_criteria.push("reviewed".to_string())),
-            Box::new(|value| value.unresolved_questions.clear()),
+            },
+            |value| value.focus_flow_refs.clear(),
+            |value| value.constraints.push("offline".to_string()),
+            |value| value.acceptance_criteria.push("reviewed".to_string()),
+            |value| value.unresolved_questions.clear(),
         ];
         for mutate in mutations {
             let mut changed = original.clone();

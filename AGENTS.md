@@ -392,7 +392,7 @@ same-database alias. They are not portable repository refs and are not silently
 rewritten. Identity transitions start a new observation chain with an explicit
 limitation rather than inventing continuity.
 
-Last-known-good follows normative `flopeek-lkg-protocol/v1`. It is three separate
+Last-known-good follows normative `flopeek-lkg-protocol/v2`. It is three separate
 domains scoped to one Diagnostic Context:
 
 ```text
@@ -1206,7 +1206,7 @@ Goal:
 
 Status:
 
-**correctness hardening in progress**
+**implemented; Diagnostic Context/LKG interoperability conformant; correctness frozen**
 
 Strengthen:
 
@@ -1222,7 +1222,7 @@ Strengthen:
 
 Status:
 
-**paused pending Diagnostic Context/LKG interoperability conformance**
+**active**
 
 Strengthen:
 

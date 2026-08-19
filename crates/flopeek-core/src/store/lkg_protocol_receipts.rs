@@ -1,5 +1,22 @@
 // Immutable command identity receipts for LKG retries.
 
+struct CommandReceipt {
+    command_kind: String,
+    request_fingerprint: String,
+    result_candidate_id: Option<String>,
+    result_event_id: String,
+}
+
+struct NewCommandReceipt<'a> {
+    context_id: &'a str,
+    idempotency_key: &'a str,
+    command_kind: &'a str,
+    request_fingerprint: &'a str,
+    candidate_id: Option<&'a str>,
+    event_id: &'a str,
+    created_at: u64,
+}
+
 fn command_request_fingerprint<T: serde::Serialize>(
     command_kind: &str,
     request: &T,
@@ -15,19 +32,25 @@ fn command_request_fingerprint<T: serde::Serialize>(
     hasher.update(canonical);
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
-
 fn receipt_row(
     transaction: &Transaction<'_>,
     context_id: &str,
     idempotency_key: &str,
-) -> Result<Option<(String, String, Option<String>, String)>, String> {
+) -> Result<Option<CommandReceipt>, String> {
     let receipt = transaction
         .query_row(
             "SELECT command_kind, request_fingerprint, result_candidate_id, result_event_id
              FROM last_known_good_command_receipts
              WHERE context_id = ?1 AND idempotency_key = ?2",
             params![context_id, idempotency_key],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok(CommandReceipt {
+                    command_kind: row.get(0)?,
+                    request_fingerprint: row.get(1)?,
+                    result_candidate_id: row.get(2)?,
+                    result_event_id: row.get(3)?,
+                })
+            },
         )
         .optional()
         .map_err(|error| format!("Unable to inspect LKG command receipt: {error}"))?;
@@ -53,19 +76,21 @@ fn proposal_receipt_result(
     request: &LastKnownGoodProposalRequest,
     fingerprint: &str,
 ) -> Result<Option<LastKnownGoodCandidate>, String> {
-    let Some((kind, stored, candidate_id, event_id)) =
+    let Some(receipt) =
         receipt_row(transaction, &request.context_id, &request.idempotency_key)?
     else {
         return Ok(None);
     };
-    if kind != "PROPOSE" || stored != fingerprint {
+    if receipt.command_kind != "PROPOSE" || receipt.request_fingerprint != fingerprint {
         return Err("idempotency-conflict".to_string());
     }
-    let candidate_id = candidate_id.ok_or_else(|| "lkg-idempotency-result-unavailable".to_string())?;
+    let candidate_id = receipt
+        .result_candidate_id
+        .ok_or_else(|| "lkg-idempotency-result-unavailable".to_string())?;
     let event_kind = transaction
         .query_row(
             "SELECT event_type FROM last_known_good_events WHERE event_id = ?1",
-            params![event_id],
+            params![receipt.result_event_id],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -91,18 +116,18 @@ fn transition_receipt_result(
     command_kind: &str,
     fingerprint: &str,
 ) -> Result<Option<LastKnownGoodEvent>, String> {
-    let Some((kind, stored, _, event_id)) =
+    let Some(receipt) =
         receipt_row(transaction, &request.context_id, &request.idempotency_key)?
     else {
         return Ok(None);
     };
-    if kind != command_kind || stored != fingerprint {
+    if receipt.command_kind != command_kind || receipt.request_fingerprint != fingerprint {
         return Err("idempotency-conflict".to_string());
     }
     let payload = transaction
         .query_row(
             "SELECT payload_json FROM last_known_good_events WHERE event_id = ?1",
-            params![event_id],
+            params![receipt.result_event_id],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -117,13 +142,7 @@ fn transition_receipt_result(
 
 fn persist_command_receipt(
     transaction: &Transaction<'_>,
-    context_id: &str,
-    idempotency_key: &str,
-    command_kind: &str,
-    request_fingerprint: &str,
-    candidate_id: Option<&str>,
-    event_id: &str,
-    created_at: u64,
+    receipt: NewCommandReceipt<'_>,
 ) -> Result<(), String> {
     transaction
         .execute(
@@ -132,16 +151,15 @@ fn persist_command_receipt(
                  result_candidate_id, result_event_id, created_at
              ) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             params![
-                context_id,
-                idempotency_key,
-                command_kind,
-                request_fingerprint,
-                candidate_id,
-                event_id,
-                created_at as i64
+                receipt.context_id,
+                receipt.idempotency_key,
+                receipt.command_kind,
+                receipt.request_fingerprint,
+                receipt.candidate_id,
+                receipt.event_id,
+                receipt.created_at as i64
             ],
         )
         .map_err(|error| format!("Unable to persist LKG command receipt: {error}"))?;
     Ok(())
 }
-

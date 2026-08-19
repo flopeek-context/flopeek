@@ -133,13 +133,15 @@ pub fn propose_last_known_good(
     ).map_err(|error| format!("Unable to persist LKG proposal event: {error}"))?;
     persist_command_receipt(
         &transaction,
-        &event.context_id,
-        &event.idempotency_key,
-        "PROPOSE",
-        &request_fingerprint,
-        Some(&event.candidate_id),
-        &event.event_id,
-        event.created_at,
+        NewCommandReceipt {
+            context_id: &event.context_id,
+            idempotency_key: &event.idempotency_key,
+            command_kind: "PROPOSE",
+            request_fingerprint: &request_fingerprint,
+            candidate_id: Some(&event.candidate_id),
+            event_id: &event.event_id,
+            created_at: event.created_at,
+        },
     )?;
     let (candidates, lifecycle) = reduced(&transaction, &candidate.context_id)?;
     let state = state_with_applicability(&transaction, root, &candidates, lifecycle.state)?;
@@ -230,13 +232,15 @@ fn transition_last_known_good(
     ).map_err(|error| format!("Unable to persist LKG transition: {error}"))?;
     persist_command_receipt(
         &transaction,
-        &event.context_id,
-        &event.idempotency_key,
-        event_type,
-        &request_fingerprint,
-        Some(&event.candidate_id),
-        &event.event_id,
-        event.created_at,
+        NewCommandReceipt {
+            context_id: &event.context_id,
+            idempotency_key: &event.idempotency_key,
+            command_kind: event_type,
+            request_fingerprint: &request_fingerprint,
+            candidate_id: Some(&event.candidate_id),
+            event_id: &event.event_id,
+            created_at: event.created_at,
+        },
     )?;
     let (candidates, lifecycle) = reduced(&transaction, &request.context_id)?;
     let state = state_with_applicability(&transaction, root, &candidates, lifecycle.state)?;

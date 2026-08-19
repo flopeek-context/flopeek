@@ -1,5 +1,4 @@
 /// Migrate Diagnostic Context basis, LKG candidate v2, and command receipts.
-
 pub(crate) fn migration_v13(transaction: &Transaction<'_>) -> Result<(), String> {
     transaction
         .execute_batch(
