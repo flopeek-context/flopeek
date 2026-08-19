@@ -52,12 +52,14 @@ execution. `getObservationContinuity` returns a bounded chain and explicitly
 reports structural-graph changes, truncation, omissions, and limitations.
 
 Context reconciliation is read-only and conservative. When an origin node is
-missing, exactly one current canonical ref with the same node kind, fingerprint
-scope, fingerprint contract, and fingerprint may resolve as `superseded`;
+missing, an exact-compatible current canonical ref is reported as a stale
+candidate with reason `unique-exact-compatible-fingerprint-candidate`;
 ambiguous, missing, legacy, or corrupted evidence remains `stale`, `unresolved`,
-or `unavailable` with a deterministic reason. This does not claim semantic
-renames, runtime equivalence, or business intent. `reconcileContextRef` exposes
-the bounded candidate evidence and evaluation event without storing guessed
+or `unavailable` with a deterministic reason. Candidate evidence is never
+stored as a successor URI. `superseded` is reserved for future proven lineage
+or explicit attributed verification. This does not claim semantic renames,
+runtime equivalence, or business intent. `reconcileContextRef` exposes the
+bounded candidate evidence and evaluation event without storing guessed
 mappings.
 
 TypeScript import evidence records named aliases, default imports, namespace
@@ -130,8 +132,9 @@ compares only the direct predecessor event and records bounded source-path,
 node, edge, and flow changes when both graph derivation and fingerprint
 contracts are compatible. Legacy or incompatible graph contracts are
 `unavailable`; they are never compared by guesswork. The delta reports exact
-source/config/entry basis relations, truncation, and omissions without source
-bodies, runtime order, rename claims, or root-cause claims. Observation events
+source/config/entry basis relations from each observation's immutable source
+manifest, truncation, and omissions without source bodies, runtime order, rename
+claims, or root-cause claims. Observation events
 remain local `observed-after` evidence rather than Git ancestry.
 
 ## Scope and provenance

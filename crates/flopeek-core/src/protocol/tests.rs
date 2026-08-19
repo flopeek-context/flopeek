@@ -56,12 +56,23 @@ fn jsonl_health_is_rust_only_and_deterministic() {
     assert_eq!(response["result"]["analyzedLanguages"][0], "typescript");
     assert_eq!(response["result"]["diagnosticMetadataAuthority"], "sqlite");
     assert_eq!(
+        response["result"]["productIdentity"],
+        "versioned-repository-context"
+    );
+    assert_eq!(response["result"]["graphRole"], "deterministic-substrate");
+    assert_eq!(response["result"]["languageCountIsProductGoal"], false);
+    assert_eq!(response["result"]["reviewGraphIsPrimaryProduct"], false);
+    assert_eq!(
+        response["result"]["graphIdentityBasis"],
+        "typescript-context-structural-evidence"
+    );
+    assert_eq!(
         response["result"]["observationContinuity"],
         "immutable-scan-event-chain"
     );
     assert_eq!(
         response["result"]["automaticSupersession"],
-        "exact-single-candidate-only"
+        "disabled-without-lineage-proof"
     );
     assert_eq!(
         response["result"]["structuralChangeAttribution"],

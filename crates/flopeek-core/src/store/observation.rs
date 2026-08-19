@@ -21,9 +21,10 @@ pub(super) fn decode_source_manifest(raw: &str) -> Result<Vec<SourceFile>, Strin
         ));
     }
     for file in &files {
-        let normalized_segments = file.path.split('/').all(|segment| {
-            !segment.is_empty() && segment != "." && segment != ".."
-        });
+        let normalized_segments = file
+            .path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
         if file.path.is_empty()
             || file.path.contains('\\')
             || file.path.contains('\0')
