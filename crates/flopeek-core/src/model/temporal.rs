@@ -92,6 +92,7 @@ pub struct HistoricalFlowChange {
 #[serde(rename_all = "camelCase")]
 pub struct HistoricalContinuityCounts {
     pub path_changes: usize,
+    pub path_lineage_candidates: usize,
     pub node_changes: usize,
     pub edge_changes: usize,
     pub flow_changes: usize,
@@ -117,6 +118,7 @@ pub struct HistoricalContextContinuity {
     pub node_status: String,
     pub fingerprint_relation: String,
     pub path_changes: Vec<HistoricalPathChange>,
+    pub path_lineage_candidates: Vec<String>,
     pub node_changes: Vec<HistoricalNodeChange>,
     pub edge_changes: Vec<HistoricalEdgeChange>,
     pub flow_changes: Vec<HistoricalFlowChange>,

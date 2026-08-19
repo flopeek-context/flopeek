@@ -43,6 +43,7 @@ pub fn get_historical_context_continuity(
             "historical-continuity-unavailable-for-dirty-source",
         ));
     }
+    let current_identity = crate::identity::resolve(root)?;
     let to = to_revision
         .map(|revision| resolve_revision(root, revision))
         .transpose()?
@@ -73,6 +74,32 @@ pub fn get_historical_context_continuity(
             uri,
             "unavailable",
             "historical-snapshot-project-mismatch",
+        ));
+    }
+    let Some(repository_id) = current_identity.repository_id.as_deref() else {
+        return Ok(unavailable(
+            graph.project_id,
+            uri,
+            "unavailable",
+            "historical-repository-identity-unavailable",
+        ));
+    };
+    if before.repository_identity_id.is_none() || after.repository_identity_id.is_none() {
+        return Ok(unavailable(
+            graph.project_id,
+            uri,
+            "unavailable",
+            "legacy-repository-identity-unavailable",
+        ));
+    }
+    if before.repository_identity_id.as_deref() != Some(repository_id)
+        || after.repository_identity_id.as_deref() != Some(repository_id)
+    {
+        return Ok(unavailable(
+            graph.project_id,
+            uri,
+            "unavailable",
+            "historical-repository-identity-mismatch",
         ));
     }
     let Some(before_contract) = before.evidence_contract.as_ref() else {
@@ -114,8 +141,16 @@ pub fn get_historical_context_continuity(
 
     let path_changes_all = path_changes(&before, &after);
     let path_total = path_changes_all.len();
+    let path_lineage_all = path_lineage_candidates(&path_changes_all);
+    let path_lineage_total = path_lineage_all.len();
     let path_changes = bound_paths(
         path_changes_all,
+        limits.max_paths,
+        &mut truncated,
+        &mut omissions,
+    );
+    let path_lineage_candidates = bound_path_lineage(
+        path_lineage_all,
         limits.max_paths,
         &mut truncated,
         &mut omissions,
@@ -196,12 +231,14 @@ pub fn get_historical_context_continuity(
         node_status,
         fingerprint_relation,
         path_changes,
+        path_lineage_candidates,
         node_changes,
         edge_changes,
         flow_changes,
         lineage_candidates,
         counts: HistoricalContinuityCounts {
             path_changes: path_total,
+            path_lineage_candidates: path_lineage_total,
             node_changes: node_total,
             edge_changes: edge_total,
             flow_changes: flow_total,
@@ -238,6 +275,7 @@ fn unavailable(
         node_status: "unavailable".to_string(),
         fingerprint_relation: "unavailable".to_string(),
         path_changes: Vec::new(),
+        path_lineage_candidates: Vec::new(),
         node_changes: Vec::new(),
         edge_changes: Vec::new(),
         flow_changes: Vec::new(),
@@ -365,6 +403,61 @@ fn path_changes(
             })
         })
         .collect()
+}
+
+fn path_lineage_candidates(changes: &[HistoricalPathChange]) -> Vec<String> {
+    let mut removed = BTreeMap::<&str, Vec<&str>>::new();
+    let mut added = BTreeMap::<&str, Vec<&str>>::new();
+    for change in changes {
+        match change.status.as_str() {
+            "removed" => {
+                if let Some(hash) = change
+                    .before_hash
+                    .as_deref()
+                    .filter(|hash| !hash.is_empty())
+                {
+                    removed.entry(hash).or_default().push(&change.path);
+                }
+            }
+            "added" => {
+                if let Some(hash) = change.after_hash.as_deref().filter(|hash| !hash.is_empty()) {
+                    added.entry(hash).or_default().push(&change.path);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut candidates = Vec::new();
+    for (hash, old_paths) in removed {
+        if let Some(new_paths) = added.get(hash) {
+            for old_path in old_paths {
+                for new_path in new_paths {
+                    candidates.push(format!(
+                        "rename-or-copy-candidate:{old_path}->{new_path}:fingerprint={hash}"
+                    ));
+                }
+            }
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn bound_path_lineage(
+    mut values: Vec<String>,
+    limit: usize,
+    truncated: &mut bool,
+    omissions: &mut Vec<String>,
+) -> Vec<String> {
+    if values.len() > limit {
+        values.truncate(limit);
+        *truncated = true;
+        omissions.push(format!(
+            "historical path lineage candidates capped at {limit}"
+        ));
+    }
+    values
 }
 
 fn focused_node_changes(

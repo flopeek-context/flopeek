@@ -59,28 +59,34 @@ pub fn resolve(root: &Path) -> Result<ResolvedIdentity, String> {
     }
     let checkout_id = checkout_id(&root);
     let manifest_path = root.join(MANIFEST_PATH);
-    if !manifest_path.exists() {
-        return Ok(ResolvedIdentity {
-            project_id: checkout_id.clone(),
-            checkout_id,
-            repository_id: None,
-            basis: IdentityBasis {
-                schema_version: MANIFEST_SCHEMA.to_string(),
-                status: "unavailable".to_string(),
+    let metadata = match fs::symlink_metadata(&manifest_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ResolvedIdentity {
+                project_id: checkout_id.clone(),
+                checkout_id,
                 repository_id: None,
-                manifest_path: None,
-                manifest_bytes: None,
-                manifest_hash: None,
-                limitations: vec![
-                    "repository-identity-manifest-unavailable".to_string(),
-                    "cross-checkout-context-unavailable".to_string(),
-                ],
-            },
-            manifest: None,
-        });
-    }
-    let metadata = fs::symlink_metadata(&manifest_path)
-        .map_err(|error| format!("Unable to inspect repository identity manifest: {error}"))?;
+                basis: IdentityBasis {
+                    schema_version: MANIFEST_SCHEMA.to_string(),
+                    status: "unavailable".to_string(),
+                    repository_id: None,
+                    manifest_path: None,
+                    manifest_bytes: None,
+                    manifest_hash: None,
+                    limitations: vec![
+                        "repository-identity-manifest-unavailable".to_string(),
+                        "cross-checkout-context-unavailable".to_string(),
+                    ],
+                },
+                manifest: None,
+            });
+        }
+        Err(error) => {
+            return Err(format!(
+                "Unable to inspect repository identity manifest: {error}"
+            ));
+        }
+    };
     if metadata.file_type().is_symlink() {
         return Err("repository-identity-manifest-invalid: symlink is not allowed".to_string());
     }
