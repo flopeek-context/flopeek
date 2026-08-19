@@ -178,21 +178,24 @@ fn observation_delta_uses_immutable_manifest_for_comment_only_source_changes() {
     assert_eq!(first.graph.graph_version, second.graph.graph_version);
 
     let connection = open(&root).expect("open");
-    let manifests = connection
-        .prepare(
-            "SELECT source_manifest_json FROM graph_observations
-             ORDER BY observed_at, observation_id",
-        )
-        .expect("manifest query")
-        .query_map([], |row| row.get::<_, String>(0))
-        .expect("manifest rows")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("manifest values");
-    assert_eq!(manifests.len(), 2);
-    let first_files = serde_json::from_str::<Vec<crate::model::SourceFile>>(&manifests[0])
-        .expect("first manifest");
-    let second_files = serde_json::from_str::<Vec<crate::model::SourceFile>>(&manifests[1])
-        .expect("second manifest");
+    let manifest_for = |observation_id: &str| {
+        connection
+            .query_row(
+                "SELECT source_manifest_json FROM graph_observations
+                 WHERE observation_id = ?1",
+                params![observation_id],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("manifest value")
+    };
+    let first_files = serde_json::from_str::<Vec<crate::model::SourceFile>>(&manifest_for(
+        &first.graph.observation_id,
+    ))
+    .expect("first manifest");
+    let second_files = serde_json::from_str::<Vec<crate::model::SourceFile>>(&manifest_for(
+        &second.graph.observation_id,
+    ))
+    .expect("second manifest");
     assert_ne!(first_files, second_files);
     let first_facts_json = serde_json::to_string(&facts_a[0]).expect("first facts json");
     connection
