@@ -392,32 +392,50 @@ same-database alias. They are not portable repository refs and are not silently
 rewritten. Identity transitions start a new observation chain with an explicit
 limitation rather than inventing continuity.
 
-Last-known-good is a separate, append-only engineering-memory binding scoped to a
-Diagnostic Context. Version 2 is a targeted state machine: `predecessorBindingId`
-is only append order; `targetBindingId` identifies the pending proposal or active
-binding acted upon; and `supersedesBindingId` is accepted only on a replacement
-confirmation. There may be only one pending proposal. Rejection preserves the
-active confirmed binding, revocation clears it, and replacement confirmation must
-target both the pending proposal and the active binding it replaces. The legacy
-`superseded` event remains read-only history and is not accepted for new writes.
-The Context pointer is reduced from the complete predecessor-linked lifecycle and
-always points to the active confirmed binding or `null`.
+Last-known-good follows normative `flopeek-lkg-protocol/v1`. It is three separate
+domains scoped to one Diagnostic Context:
 
-Bindings must carry repository identity, Git revision, provenance and validation
-evidence. If a graph basis is supplied, project, revision, graph, graph version,
-observation, and optional event must agree; otherwise validation is invalid with
-`last-known-good-basis-provenance-mismatch`. Historical diagnosis may use only an
-active confirmed binding whose revision is on the current HEAD first-parent
-lineage and whose basis is provenance-consistent. Revision existence or general
-Git reachability alone is insufficient.
+```text
+LastKnownGoodCandidate  = immutable proposition and integrity evidence
+LastKnownGoodEvent      = append-only PROPOSE/CONFIRM/REJECT/REVOKE event
+LastKnownGoodState      = pure deterministic reduction and projection
+```
 
-Agents and tools may propose a binding. A caller may declare `actorKind = human`
-to confirm, reject, or revoke it, but this is attributed actor metadata, not
-authenticated human identity. Before Flopeek exposes an untrusted remote agent
-surface, human-only transitions require a separate trusted action boundary.
-Flopeek must not infer last-known-good from tests, commit messages, graph
-similarity, or candidate ranking. A legacy `lastKnownGoodBasis` is readable as
-`legacy-unbound` and is not used by new historical diagnosis.
+Candidates bind repository/project, exact Context revision and expected behavior
+fingerprint, full Git SHA, observation-owned Graph Basis, evidence contract,
+proposer, evidence, reason, timestamp, and integrity. Integrity is `complete`,
+`partial`, or `invalid`; only `complete` candidates can be confirmed. A bounded
+detached historical observation may be `partial` without changing current
+project state or observation continuity.
+
+The reducer accepts only `PROPOSE`, `CONFIRM`, `REJECT`, and `REVOKE`; `SUPERSEDE`
+is forbidden. There is at most one pending and one active candidate. A proposal
+does not change active state; rejection preserves active state; revocation clears
+it; replacement confirmation targets the pending candidate and records the active
+candidate as `replacesCandidateId`. Direct confirmation is allowed only when no
+pending or active candidate exists. `tipEventId` and
+`lastKnownGoodCandidateId` are transactional projections and never advance the
+Diagnostic Context revision.
+
+Exact revision authority is `graph_observations.git_revision`. The
+`graph_versions.source_revision` column is structural materialization metadata
+only and must not be used to reject a candidate when its observation basis is
+consistent. Applicability is re-evaluated on read/use: repository and Context
+revision must match, the candidate revision must be on current HEAD's explicit
+first-parent lineage, and observation/graph/evidence contracts must agree.
+Statuses include `applicable`, `out-of-lineage`, `repository-mismatch`,
+`context-revision-mismatch`, `basis-unavailable`, `contract-incompatible`, and
+`unavailable`.
+
+The raw JSONL boundary is untrusted: it can propose but cannot confirm, reject,
+or revoke merely by sending `actorKind = human`. Those transitions are exposed
+only through the trusted local `flopeek lkg` CLI, whose actor identity is
+caller-attributed, not authenticated. Retry with the same idempotency key and
+payload is idempotent; a different payload or stale expected tip fails closed.
+Legacy v2 bindings remain raw read-only evidence and ambiguous semantics are
+quarantined during migration; they are never silently promoted into an active
+protocol state. Historical diagnosis uses only complete, applicable active
+candidates and never calls a candidate a cause or root cause.
 
 ### 7.4 Diagnostic revision
 
@@ -1060,8 +1078,12 @@ Required concepts include:
   "reviewGraphIsPrimaryProduct": false,
   "contextReconciliation": "exact-compatible-fingerprint-candidates",
   "automaticSupersession": "disabled-without-lineage-proof",
-  "lastKnownGoodLifecycle": "targeted-append-only-state-machine",
+  "lastKnownGoodModel": "immutable-candidate-append-only-event-reduced-state",
+  "lastKnownGoodLifecycle": "protocol-1.0-deterministic-reducer",
   "lastKnownGoodProvenance": "revision-observation-graph-consistent",
+  "lastKnownGoodIntegrity": "observation-owned-revision-and-graph-contract",
+  "lastKnownGoodApplicability": "current-first-parent-and-context-revision",
+  "lastKnownGoodTrust": "local-transition-boundary-caller-attributed",
   "humanActorIdentity": "caller-attributed-not-authenticated"
 }
 ```
@@ -1144,7 +1166,7 @@ Goal:
 
 Status:
 
-**implemented; correctness frozen**
+**implemented; LKG Protocol 1.0 conformant; correctness frozen**
 
 Strengthen:
 
@@ -1160,7 +1182,7 @@ Strengthen:
 
 Status:
 
-**active**
+**paused pending LKG Protocol 1.0 conformance merge**
 
 Strengthen:
 

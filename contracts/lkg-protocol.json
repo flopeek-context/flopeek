@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "flopeek-lkg-protocol/v1",
+  "candidate": {
+    "schemaVersion": "flopeek-last-known-good-candidate/v1",
+    "expectedBehaviorFingerprint": "sha256(contract-id-and-exact-utf8-expectedBehavior)",
+    "integrityStatuses": ["complete", "partial", "invalid"],
+    "confirmationRequires": "complete-integrity-and-applicable-basis"
+  },
+  "reviewPacket": {
+    "schemaVersion": "flopeek-last-known-good-review-packet/v1",
+    "includes": ["context", "candidate", "state", "applicability", "candidate-to-current-structural-delta", "confirmability"],
+    "sourceBody": false,
+    "runtimeClaims": false,
+    "causalClaims": false
+  },
+  "event": {
+    "schemaVersion": "flopeek-last-known-good-event/v1",
+    "types": ["PROPOSE", "CONFIRM", "REJECT", "REVOKE"],
+    "forbiddenTypes": ["SUPERSEDE"],
+    "onePendingCandidate": true,
+    "oneActiveCandidate": true
+  },
+  "state": {
+    "schemaVersion": "flopeek-last-known-good-state/v1",
+    "lifecycleStatuses": ["none", "pending", "active", "inactive", "corrupt"],
+    "applicabilityStatuses": [
+      "applicable",
+      "out-of-lineage",
+      "repository-mismatch",
+      "context-revision-mismatch",
+      "basis-unavailable",
+      "contract-incompatible",
+      "unavailable"
+    ],
+    "authority": "candidate-and-event-reduction",
+    "invariants": [
+      "at-most-one-pending",
+      "at-most-one-active",
+      "context-pointer-equals-active-candidate-or-null",
+      "materialized-state-must-match-reduction"
+    ]
+  },
+  "transitionMatrix": {
+    "PROPOSE": "creates-pending-only",
+    "CONFIRM": "targets-pending-and-optionally-replaces-active",
+    "REJECT": "targets-pending-and-preserves-active",
+    "REVOKE": "targets-active-and-clears-active"
+  },
+  "validation": {
+    "integrity": ["complete", "partial", "invalid"],
+    "applicability": "recomputed-at-read-and-use",
+    "revisionAuthority": "graph_observations.git_revision",
+    "graphVersionSourceRevisionAuthority": false
+  },
+  "concurrency": {
+    "expectedTipRequired": true,
+    "idempotencyRequired": true,
+    "staleTipReason": "stale-lifecycle-tip",
+    "retryBehavior": "return-existing-event",
+    "conflictingRetryReason": "idempotency-conflict"
+  },
+  "trust": {
+    "proposalTransports": ["untrusted-jsonl", "local-cli"],
+    "humanTransitions": ["local-cli"],
+    "actorIdentity": "caller-attributed-not-authenticated"
+  },
+  "migration": {
+    "policy": "preserve-semantics-or-quarantine",
+    "ambiguousReason": "legacy-lkg-semantics-ambiguous",
+    "rawLegacyEvidence": "retained-read-only",
+    "failClosed": true
+  }
+}
