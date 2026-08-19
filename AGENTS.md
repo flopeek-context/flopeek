@@ -371,10 +371,26 @@ materialization and may be reused or rebuilt for an equivalent graph; they are
 not historical exact-source authority. Cross-observation source comparison
 must use the observation-owned source manifest.
 
-The current `project_id` is checkout-local because it is derived from the
-canonical local checkout path. Before cross-machine context sharing, define a
-stable repository identity separately from checkout identity. Do not infer
-repository identity from a mutable Git remote URL alone.
+Repository identity is explicit and separate from checkout identity. A tracked
+root `.flopeek-repository.json` manifest uses
+`flopeek-repository-identity/v1` and contains only a validated `repo_<uuid>`
+identifier. The scanner reads this manifest but never creates or mutates it.
+The manifest is bounded, strict JSON, repository-relative, and is the only
+authority for portable repository identity. Git remote URLs are not identity
+authority.
+
+When the manifest is present, `project_id` is derived from the repository
+identity and is stable across checkouts. The canonical checkout path remains a
+local-only checkout identity used only for compatibility aliases and must not
+be persisted in portable evidence. Without a valid manifest, Flopeek remains
+usable in explicit `checkout-local` mode and reports cross-checkout context as
+unavailable. Invalid identity metadata is an error; it must never silently
+fall back to a different portable identity.
+
+Legacy checkout-local project IDs and refs remain addressable only through a
+same-database alias. They are not portable repository refs and are not silently
+rewritten. Identity transitions start a new observation chain with an explicit
+limitation rather than inventing continuity.
 
 ### 7.4 Diagnostic revision
 
