@@ -260,6 +260,242 @@ fn review_packet_contains_bounded_candidate_to_current_delta() {
 }
 
 #[test]
+fn replacement_review_packet_keeps_active_state_and_reviews_pending_candidate() {
+    let (root, context, revision_a) = setup();
+    propose_last_known_good(
+        &root,
+        proposal(&context, &revision_a, "replacement-a-propose"),
+    )
+    .expect("proposal A");
+    let pending_a = get_last_known_good_protocol(&root, &context.id).expect("pending A");
+    confirm_last_known_good_local(
+        &root,
+        transition(&context, &pending_a, "replacement-a-confirm"),
+    )
+    .expect("confirm A");
+    let active_a = get_last_known_good_protocol(&root, &context.id).expect("active A");
+
+    fs::write(
+        root.join("src/main.ts"),
+        "// observation-only change\nexport const main = 1;\n",
+    )
+    .expect("comment-only source");
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "observation-only replacement"]);
+    let revision_b = git(&root, &["rev-parse", "HEAD"]);
+    let (snapshot_b, facts_b) = crate::graph::build(&root).expect("build B");
+    persist_scan(&root, snapshot_b, &facts_b).expect("scan B");
+
+    let mut request_b = proposal(&context, &revision_b, "replacement-b-propose");
+    request_b.expected_tip_event_id = active_a.tip_event_id.clone();
+    let candidate_b = propose_last_known_good(&root, request_b).expect("proposal B");
+    let packet = get_last_known_good_review_packet(&root, &context.id).expect("review B");
+
+    assert_eq!(packet.candidate.candidate_id, candidate_b.candidate_id);
+    assert_eq!(
+        packet.state.active_candidate_id,
+        active_a.active_candidate_id
+    );
+    assert_eq!(
+        packet.state.pending_candidate_id,
+        Some(candidate_b.candidate_id.clone())
+    );
+    assert_eq!(packet.state.applicability_status, "applicable");
+    assert_eq!(packet.applicability.status, "applicable");
+    assert!(packet.confirmable);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn detached_same_graph_reuse_uses_observation_manifest_not_source_rows() {
+    let (root, context, revision_a) = setup();
+    let graph_a = current_graph(&root).expect("graph A").expect("current A");
+    fs::write(
+        root.join("src/main.ts"),
+        "// observation-only change\nexport const main = 1;\n",
+    )
+    .expect("comment-only source");
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "observation-only current"]);
+    let _revision_b = git(&root, &["rev-parse", "HEAD"]);
+    let (snapshot_b, facts_b) = crate::graph::build(&root).expect("build B");
+    let scan_b = persist_scan(&root, snapshot_b, &facts_b).expect("scan B");
+    assert_eq!(graph_a.graph_id, scan_b.graph.graph_id);
+    assert_eq!(graph_a.graph_version, scan_b.graph.graph_version);
+
+    let candidate = propose_last_known_good(&root, proposal(&context, &revision_a, "detached-a"))
+        .expect("historical A proposal");
+    assert_eq!(candidate.integrity.status, "complete");
+    let candidate_observation = candidate.observation_id.expect("historical observation");
+    let current_observation = scan_b.graph.observation_id.clone();
+    assert_ne!(candidate_observation, current_observation);
+    let connection = open(&root).expect("open database");
+    let historical_manifest: String = connection
+        .query_row(
+            "SELECT source_manifest_json FROM graph_observations WHERE observation_id = ?1",
+            rusqlite::params![candidate_observation],
+            |row| row.get(0),
+        )
+        .expect("historical manifest");
+    let current_manifest: String = connection
+        .query_row(
+            "SELECT source_manifest_json FROM graph_observations WHERE observation_id = ?1",
+            rusqlite::params![current_observation],
+            |row| row.get(0),
+        )
+        .expect("current manifest");
+    assert_ne!(historical_manifest, current_manifest);
+    assert!(!historical_manifest.contains("observation-only change"));
+    drop(connection);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn detached_reuse_rejects_corrupt_structural_rows_and_contracts() {
+    let (root, context, _revision_a) = setup();
+    let graph_a = current_graph(&root).expect("graph A").expect("current A");
+    fs::write(
+        root.join("src/main.ts"),
+        "// observation-only change\nexport const main = 1;\n",
+    )
+    .expect("comment-only source");
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "structural validation current"]);
+    let revision_b = git(&root, &["rev-parse", "HEAD"]);
+    let graph_version = graph_a.graph_version as i64;
+    let connection = open(&root).expect("open database");
+    let original_node: String = connection
+        .query_row(
+            "SELECT evidence_fingerprint FROM graph_nodes WHERE graph_version = ?1 LIMIT 1",
+            rusqlite::params![graph_version],
+            |row| row.get(0),
+        )
+        .expect("node");
+    let changed = connection
+        .execute(
+            "UPDATE graph_nodes SET evidence_fingerprint = 'corrupt-node'
+             WHERE rowid = (SELECT rowid FROM graph_nodes WHERE graph_version = ?1 LIMIT 1)",
+            rusqlite::params![graph_version],
+        )
+        .expect("corrupt node");
+    assert_eq!(changed, 1);
+    drop(connection);
+    assert!(
+        propose_last_known_good(&root, proposal(&context, &revision_b, "corrupt-node"))
+            .expect_err("node corruption")
+            .contains("historical-observation-graph-rows-mismatch")
+    );
+
+    let connection = open(&root).expect("open node repair");
+    connection
+        .execute(
+            "UPDATE graph_nodes SET evidence_fingerprint = ?1
+             WHERE rowid = (SELECT rowid FROM graph_nodes WHERE graph_version = ?2 LIMIT 1)",
+            rusqlite::params![original_node, graph_version],
+        )
+        .expect("restore node");
+    let original_edge: String = connection
+        .query_row(
+            "SELECT evidence FROM graph_edges WHERE graph_version = ?1 LIMIT 1",
+            rusqlite::params![graph_version],
+            |row| row.get(0),
+        )
+        .expect("edge");
+    connection
+        .execute(
+            "UPDATE graph_edges SET evidence = 'corrupt-edge'
+             WHERE rowid = (SELECT rowid FROM graph_edges WHERE graph_version = ?1 LIMIT 1)",
+            rusqlite::params![graph_version],
+        )
+        .expect("corrupt edge");
+    drop(connection);
+    assert!(
+        propose_last_known_good(&root, proposal(&context, &revision_b, "corrupt-edge"))
+            .expect_err("edge corruption")
+            .contains("historical-observation-graph-rows-mismatch")
+    );
+
+    let connection = open(&root).expect("open edge repair");
+    connection
+        .execute(
+            "UPDATE graph_edges SET evidence = ?1
+             WHERE rowid = (SELECT rowid FROM graph_edges WHERE graph_version = ?2 LIMIT 1)",
+            rusqlite::params![original_edge, graph_version],
+        )
+        .expect("restore edge");
+    let original_entry: String = connection
+        .query_row(
+            "SELECT entry_json FROM graph_flow_evidence WHERE graph_version = ?1",
+            rusqlite::params![graph_version],
+            |row| row.get(0),
+        )
+        .expect("flow evidence");
+    connection
+        .execute(
+            "UPDATE graph_flow_evidence SET entry_json = '{}' WHERE graph_version = ?1",
+            rusqlite::params![graph_version],
+        )
+        .expect("corrupt flow evidence");
+    drop(connection);
+    assert!(
+        propose_last_known_good(&root, proposal(&context, &revision_b, "corrupt-flow"))
+            .expect_err("flow corruption")
+            .contains("historical-observation-graph-rows-mismatch")
+    );
+
+    let connection = open(&root).expect("open flow repair");
+    connection
+        .execute(
+            "UPDATE graph_flow_evidence SET entry_json = ?1 WHERE graph_version = ?2",
+            rusqlite::params![original_entry, graph_version],
+        )
+        .expect("restore flow evidence");
+    connection
+        .execute(
+            "UPDATE graph_versions SET graph_derivation_id = 'corrupt-contract' WHERE graph_version = ?1",
+            rusqlite::params![graph_version],
+        )
+        .expect("corrupt contract");
+    drop(connection);
+    assert!(
+        propose_last_known_good(&root, proposal(&context, &revision_b, "corrupt-contract"))
+            .expect_err("contract corruption")
+            .contains("historical-observation-graph-rows-mismatch")
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn protocol_diagnosis_does_not_synthesize_confirmer_from_proposer() {
+    let (root, context, revision) = setup();
+    propose_last_known_good(&root, proposal(&context, &revision, "attribution-propose"))
+        .expect("proposal");
+    let pending = get_last_known_good_protocol(&root, &context.id).expect("pending");
+    confirm_last_known_good_local(&root, transition(&context, &pending, "attribution-confirm"))
+        .expect("human confirmation");
+    let events = list_last_known_good_protocol(&root, &context.id, 16).expect("history");
+    assert_eq!(events[0].actor, "agent");
+    assert_eq!(events[0].actor_kind, "agent-or-tool");
+    assert_eq!(events[1].actor, "human-reviewer");
+    assert_eq!(events[1].actor_kind, "human");
+    let diagnosis = crate::diagnostic::diagnose_history(
+        &root,
+        &context.id,
+        crate::model::DiagnosticLimits::default(),
+    )
+    .expect("diagnosis");
+    assert!(diagnosis.last_known_good_binding.is_none());
+    assert_eq!(
+        diagnosis
+            .last_known_good_candidate
+            .expect("candidate")
+            .proposed_by,
+        "agent"
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
 fn protocol_partial_historical_candidate_is_stored_but_not_confirmable() {
     let (root, context, _revision) = setup();
     fs::write(root.join("src/new.ts"), "export const newValue = 2;").expect("source");
@@ -302,7 +538,7 @@ fn protocol_side_branch_candidate_is_complete_but_out_of_lineage() {
 }
 
 #[test]
-fn pure_reducer_allows_only_empty_state_direct_confirmation() {
+fn pure_reducer_rejects_confirmation_without_pending_candidate() {
     let candidate = LastKnownGoodCandidate {
         schema_version: LKG_CANDIDATE_SCHEMA.to_string(),
         candidate_id: "candidate-direct".to_string(),
@@ -347,7 +583,7 @@ fn pure_reducer_allows_only_empty_state_direct_confirmation() {
         idempotency_key: "direct-confirm".to_string(),
     };
     let context_id = candidate.context_id.clone();
-    let reduced = reduce_last_known_good(&context_id, &[candidate], &[event])
-        .expect("direct confirmation from empty state");
-    assert_eq!(reduced.state.lifecycle_status, "active");
+    let error = reduce_last_known_good(&context_id, &[candidate], &[event])
+        .expect_err("direct confirmation must require a pending candidate");
+    assert_eq!(error, "lkg-confirm-target-not-pending");
 }
