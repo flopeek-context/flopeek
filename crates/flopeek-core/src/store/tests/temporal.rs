@@ -515,7 +515,7 @@ fn fresh_and_upgraded_v8_schema_match_and_migration_failure_rolls_back() {
     connection
         .execute(
             "INSERT INTO diagnostic_contexts(id, project_id, revision, payload_json, created_at)
-             VALUES('context-v6', ?1, 1, '{\"schemaVersion\":\"flopeek-diagnostic-context/v3\",\"contextSentinel\":\"keep\",\"focusFlowRefs\":[]}', 1)",
+             VALUES('context-v6', ?1, 1, '{\"schemaVersion\":\"flopeek-diagnostic-context/v4\",\"contextSentinel\":\"keep\",\"focusFlowRefs\":[]}', 1)",
             params![project_id],
         )
         .expect("context row");

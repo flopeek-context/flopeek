@@ -129,7 +129,7 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
         "observationId": graph["observation_id"],
     });
     let context = json!({
-        "schemaVersion": "flopeek-diagnostic-context/v3",
+        "schemaVersion": "flopeek-diagnostic-context/v4",
         "id": "jsonl-flow-context",
         "projectId": scan["project_id"],
         "revision": 0,
@@ -217,18 +217,18 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
     assert_eq!(responses[5]["result"]["status"], "current");
     assert_eq!(
         responses[6]["result"]["schemaVersion"],
-        "flopeek-observation-continuity/v1"
+        "flopeek-observation-continuity/v2"
     );
     assert_eq!(responses[6]["result"]["truncated"], true);
     assert_eq!(
         responses[7]["result"]["schemaVersion"],
-        "flopeek-context-reconciliation/v1"
+        "flopeek-context-reconciliation/v2"
     );
     assert_eq!(responses[7]["result"]["status"], "current");
     assert_eq!(responses[8]["result"]["node"]["id"], node_id);
     assert_eq!(
         responses[10]["result"]["schemaVersion"],
-        "flopeek-observation-delta/v1"
+        "flopeek-observation-delta/v2"
     );
     assert_eq!(responses[10]["result"]["status"], "unavailable");
     let context_id = responses[9]["result"]["id"]

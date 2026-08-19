@@ -32,6 +32,28 @@ fn persists_graph_atomically_and_reuses_version() {
 }
 
 #[test]
+fn repository_manifest_is_persisted_without_checkout_path() {
+    let root = fixture_root();
+    fs::write(
+        root.join(crate::identity::MANIFEST_PATH),
+        r#"{"schemaVersion":"flopeek-repository-identity/v1","repositoryId":"repo_123e4567-e89b-12d3-a456-426614174000"}"#,
+    )
+    .expect("identity manifest");
+    let (snapshot, facts) = graph::build(&root).expect("build");
+    let result = persist_scan(&root, snapshot, &facts).expect("persist");
+    assert_eq!(result.identity_basis.status, "available");
+    assert_eq!(
+        result.identity_basis.repository_id.as_deref(),
+        Some("repo_123e4567-e89b-12d3-a456-426614174000")
+    );
+    let encoded = serde_json::to_string(&result).expect("encoded scan");
+    assert!(!encoded.contains(&root.to_string_lossy().to_string()));
+    let current = current_graph(&root).expect("current graph").expect("graph");
+    assert_eq!(current.identity_basis.status, "available");
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
 fn context_ref_becomes_stale_after_graph_changes() {
     let root = fixture_root();
     let (snapshot, facts) = graph::build(&root).expect("build");
