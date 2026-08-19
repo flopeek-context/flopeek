@@ -5,5 +5,6 @@
 // widening the public facade. Each portion has one bounded responsibility.
 
 include!("lkg_protocol_support.rs");
+include!("lkg_protocol_receipts.rs");
 include!("lkg_protocol_commands.rs");
 include!("lkg_protocol_queries.rs");

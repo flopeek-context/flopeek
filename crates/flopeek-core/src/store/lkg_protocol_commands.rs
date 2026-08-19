@@ -2,43 +2,14 @@ pub fn propose_last_known_good(
     root: &Path,
     request: LastKnownGoodProposalRequest,
 ) -> Result<LastKnownGoodCandidate, String> {
+    let request_fingerprint = command_request_fingerprint("PROPOSE", &request)?;
     let mut connection = open(root)?;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| format!("Unable to begin LKG proposal: {error}"))?;
-    if let Some(existing_payload) = transaction
-        .query_row(
-            "SELECT payload_json FROM last_known_good_events
-             WHERE context_id = ?1 AND idempotency_key = ?2",
-            params![&request.context_id, &request.idempotency_key],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|error| format!("Unable to inspect LKG proposal idempotency: {error}"))?
+    if let Some(existing) =
+        proposal_receipt_result(&transaction, &request, &request_fingerprint)?
     {
-        let existing_event = decode::<LastKnownGoodEvent>(
-            &existing_payload,
-            "LastKnownGoodEvent",
-        )?;
-        let existing = transaction
-            .query_row(
-                "SELECT payload_json FROM last_known_good_candidates WHERE candidate_id = ?1",
-                params![existing_event.candidate_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| format!("Unable to read idempotent LKG candidate: {error}"))?
-            .ok_or_else(|| "lkg-idempotency-candidate-unavailable".to_string())?;
-        let existing = decode::<LastKnownGoodCandidate>(&existing, "LastKnownGoodCandidate")?;
-        if !proposal_retry_matches(
-            &transaction,
-            root,
-            &request,
-            &existing_event,
-            &existing,
-        )? {
-            return Err("idempotency-conflict".to_string());
-        }
         transaction.rollback().ok();
         return Ok(existing);
     }
@@ -84,23 +55,17 @@ pub fn propose_last_known_good(
         )?;
     }
     let candidate = candidate_for_request(&transaction, root, &request)?;
-    if let Some(existing) = transaction
+    if transaction
         .query_row(
-            "SELECT payload_json FROM last_known_good_candidates WHERE candidate_id = ?1",
+            "SELECT 1 FROM last_known_good_candidates WHERE candidate_id = ?1",
             params![candidate.candidate_id],
-            |row| row.get::<_, String>(0),
+            |row| row.get::<_, i64>(0),
         )
         .optional()
         .map_err(|error| format!("Unable to inspect LKG idempotency: {error}"))?
+        .is_some()
     {
-        let existing = decode::<LastKnownGoodCandidate>(&existing, "LastKnownGoodCandidate")?;
-        if existing.proposed_by != request.actor
-            || existing.reason != request.reason
-            || existing.evidence != request.evidence
-        {
-            return Err("idempotency-conflict".to_string());
-        }
-        return Ok(existing);
+        return Err("lkg-command-receipt-missing".to_string());
     }
     let (_, lifecycle) = reduced(&transaction, &request.context_id)?;
     check_expected_tip(&lifecycle, request.expected_tip_event_id.as_deref())?;
@@ -120,13 +85,15 @@ pub fn propose_last_known_good(
     transaction.execute(
         "INSERT INTO last_known_good_candidates(
              candidate_id, repository_id, project_id, context_id,
-             context_revision, expected_behavior_fingerprint, git_revision,
+             context_revision, context_definition_revision,
+             context_basis_fingerprint, expected_behavior_fingerprint, git_revision,
              observation_id, graph_basis_json, evidence_contract_json,
              proposed_by, proposed_at, evidence_json, reason, integrity_json,
              payload_json
-         ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+         ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
         params![candidate.candidate_id, candidate.repository_id, candidate.project_id,
-            candidate.context_id, candidate.context_revision as i64,
+            candidate.context_id, candidate.context_definition_revision as i64,
+            candidate.context_definition_revision as i64, candidate.context_basis_fingerprint,
             candidate.expected_behavior_fingerprint, candidate.git_revision,
             candidate.observation_id, graph_basis_json, contract_json,
             candidate.proposed_by, candidate.proposed_at as i64, evidence_json,
@@ -164,6 +131,16 @@ pub fn propose_last_known_good(
             event.actor_trust, event.reason, evidence_json, event.created_at as i64,
             event.idempotency_key, event_json],
     ).map_err(|error| format!("Unable to persist LKG proposal event: {error}"))?;
+    persist_command_receipt(
+        &transaction,
+        &event.context_id,
+        &event.idempotency_key,
+        "PROPOSE",
+        &request_fingerprint,
+        Some(&event.candidate_id),
+        &event.event_id,
+        event.created_at,
+    )?;
     let (candidates, lifecycle) = reduced(&transaction, &candidate.context_id)?;
     let state = state_with_applicability(&transaction, root, &candidates, lifecycle.state)?;
     persist_state(&transaction, &state)?;
@@ -185,32 +162,16 @@ fn transition_last_known_good(
     validate_text(&request.reason, "reason", 4_096)?;
     validate_text(&request.idempotency_key, "idempotencyKey", 128)?;
     validate_evidence(&request.evidence)?;
+    let request_fingerprint = command_request_fingerprint(event_type, &request)?;
     let mut connection = open(root)?;
     let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| format!("Unable to begin LKG transition: {error}"))?;
-    if let Some(existing) = transaction
-        .query_row(
-            "SELECT payload_json FROM last_known_good_events
-             WHERE context_id = ?1 AND idempotency_key = ?2",
-            params![request.context_id, request.idempotency_key],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|error| format!("Unable to inspect LKG transition idempotency: {error}"))?
-    {
-        let existing = decode::<LastKnownGoodEvent>(&existing, "LastKnownGoodEvent")?;
-        if existing.event_type != event_type
-            || existing.actor != request.actor
-            || existing.reason != request.reason
-            || existing.evidence != request.evidence
-            || existing.predecessor_event_id != request.expected_tip_event_id
-            || request
-                .candidate_id
-                .as_deref()
-                .is_some_and(|candidate_id| candidate_id != existing.candidate_id)
-        {
-            return Err("idempotency-conflict".to_string());
-        }
+    if let Some(existing) = transition_receipt_result(
+        &transaction,
+        &request,
+        event_type,
+        &request_fingerprint,
+    )? {
         return Ok(existing);
     }
     let (candidates, lifecycle) = reduced(&transaction, &request.context_id)?;
@@ -267,6 +228,16 @@ fn transition_last_known_good(
             event.actor_trust, event.reason, evidence_json, event.created_at as i64,
             event.idempotency_key, event_json],
     ).map_err(|error| format!("Unable to persist LKG transition: {error}"))?;
+    persist_command_receipt(
+        &transaction,
+        &event.context_id,
+        &event.idempotency_key,
+        event_type,
+        &request_fingerprint,
+        Some(&event.candidate_id),
+        &event.event_id,
+        event.created_at,
+    )?;
     let (candidates, lifecycle) = reduced(&transaction, &request.context_id)?;
     let state = state_with_applicability(&transaction, root, &candidates, lifecycle.state)?;
     persist_state(&transaction, &state)?;
