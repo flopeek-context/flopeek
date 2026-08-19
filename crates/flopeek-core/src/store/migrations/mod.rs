@@ -12,8 +12,8 @@ mod versions;
 
 pub(super) use base::{migration_v1, migration_v2, migration_v3, migration_v4};
 pub(super) use evidence::migration_v8;
-pub(super) use identity::migration_v9;
 pub(super) use helpers::*;
+pub(super) use identity::migration_v9;
 #[cfg(test)]
 pub(crate) use temporal::migration_v7;
 pub(super) use versions::{migration_v5, migration_v6};

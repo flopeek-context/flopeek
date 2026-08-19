@@ -340,9 +340,10 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
         related_test_evidence: &related_test_evidence,
         flows: &flows,
     };
-    let graph_id = blake3::hash(&serde_json::to_vec(&graph_identity).map_err(|error| error.to_string())?)
-        .to_hex()
-        .to_string();
+    let graph_id =
+        blake3::hash(&serde_json::to_vec(&graph_identity).map_err(|error| error.to_string())?)
+            .to_hex()
+            .to_string();
     let module_resolution = module_resolver.basis.clone();
     Ok((
         GraphSnapshot {
