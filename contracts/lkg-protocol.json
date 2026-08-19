@@ -1,13 +1,14 @@
 {
-  "schemaVersion": "flopeek-lkg-protocol/v1",
+  "schemaVersion": "flopeek-lkg-protocol/v2",
   "candidate": {
-    "schemaVersion": "flopeek-last-known-good-candidate/v1",
+    "schemaVersion": "flopeek-last-known-good-candidate/v2",
+    "contextBinding": "context-definition-revision-and-canonical-basis-fingerprint",
     "expectedBehaviorFingerprint": "sha256(contract-id-and-exact-utf8-expectedBehavior)",
     "integrityStatuses": ["complete", "partial", "invalid"],
     "confirmationRequires": "complete-integrity-and-applicable-basis"
   },
   "reviewPacket": {
-    "schemaVersion": "flopeek-last-known-good-review-packet/v1",
+    "schemaVersion": "flopeek-last-known-good-review-packet/v2",
     "includes": ["context", "candidate", "state", "applicability", "candidate-to-current-structural-delta", "confirmability"],
     "candidateSelection": "pending-first-otherwise-active",
     "applicabilitySemantics": {
@@ -27,13 +28,13 @@
     "oneActiveCandidate": true
   },
   "state": {
-    "schemaVersion": "flopeek-last-known-good-state/v1",
+    "schemaVersion": "flopeek-last-known-good-state/v2",
     "lifecycleStatuses": ["none", "pending", "active", "inactive", "corrupt"],
     "applicabilityStatuses": [
       "applicable",
       "out-of-lineage",
       "repository-mismatch",
-      "context-revision-mismatch",
+      "context-basis-mismatch",
       "basis-unavailable",
       "contract-incompatible",
       "unavailable"
@@ -88,13 +89,30 @@
     "expectedTipRequired": true,
     "idempotencyRequired": true,
     "staleTipReason": "stale-lifecycle-tip",
-    "retryBehavior": "return-existing-event",
+    "requestIdentity": "canonical-original-typed-request-before-mutable-resolution",
+    "retryBehavior": "return-original-result-without-revalidation",
+    "legacyReceiptBehavior": "legacy-lkg-idempotency-replay-unavailable",
     "conflictingRetryReason": "idempotency-conflict"
   },
   "trust": {
     "proposalTransports": ["untrusted-jsonl", "local-cli"],
-    "humanTransitions": ["local-cli"],
+    "humanTransitions": ["trusted-local-process-api"],
+    "officialHumanSurface": "local-cli",
     "actorIdentity": "caller-attributed-not-authenticated"
+  },
+  "contextInterop": {
+    "basisSchemaVersion": "flopeek-diagnostic-context-basis/v1",
+    "definitionRevision": "definition-fields-only",
+    "memoryRevision": "assertion-stream-only",
+    "applicabilityBinding": "context-basis-and-expected-behavior",
+    "diagnosisPreservesActiveInapplicable": true
+  },
+  "history": {
+    "schemaVersion": "flopeek-last-known-good-history/v1",
+    "orderAuthority": "predecessor-event-chain",
+    "timestampRole": "display-metadata-only",
+    "defaultLimit": 128,
+    "hardLimit": 1024
   },
   "migration": {
     "policy": "preserve-semantics-or-quarantine",

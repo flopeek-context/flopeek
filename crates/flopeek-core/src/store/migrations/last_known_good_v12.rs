@@ -147,8 +147,7 @@ fn migrate_legacy_lkg(transaction: &Transaction<'_>) -> Result<(), String> {
         let Some(context_payload) = context_payload else {
             continue;
         };
-        let Ok(context) = serde_json::from_str::<crate::model::DiagnosticContext>(&context_payload)
-        else {
+        let Ok(context) = decode_context_for_lkg_v12(&context_payload) else {
             continue;
         };
         let reduced = crate::model::reduce_last_known_good_lifecycle(bindings.clone());
@@ -358,7 +357,7 @@ fn migrate_legacy_lkg(transaction: &Transaction<'_>) -> Result<(), String> {
                         candidate.repository_id,
                         candidate.project_id,
                         candidate.context_id,
-                        candidate.context_revision as i64,
+                        candidate.context_definition_revision as i64,
                         candidate.expected_behavior_fingerprint,
                         candidate.git_revision,
                         candidate.observation_id,
@@ -459,7 +458,8 @@ fn legacy_candidate(
         repository_id: binding.repository_id.clone(),
         project_id: binding.project_id.clone(),
         context_id: binding.context_id.clone(),
-        context_revision: context.revision,
+        context_definition_revision: context.context_definition_revision,
+        context_basis_fingerprint: context.context_basis_fingerprint.clone(),
         expected_behavior_fingerprint: crate::model::expected_behavior_fingerprint(
             &context.expected_behavior,
         ),
@@ -480,6 +480,27 @@ fn legacy_candidate(
             limitations,
         },
     }
+}
+
+fn decode_context_for_lkg_v12(payload: &str) -> Result<crate::model::DiagnosticContext, String> {
+    let mut value = serde_json::from_str::<serde_json::Value>(payload)
+        .map_err(|error| error.to_string())?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "legacy Diagnostic Context is not an object".to_string())?;
+    object.remove("revision");
+    object.insert(
+        "schemaVersion".to_string(),
+        serde_json::json!(crate::model::DIAGNOSTIC_CONTEXT_SCHEMA),
+    );
+    object.insert("contextDefinitionRevision".to_string(), serde_json::json!(1));
+    object.insert("contextBasisFingerprint".to_string(), serde_json::json!(""));
+    object.insert("memoryRevision".to_string(), serde_json::json!(0));
+    let provisional = serde_json::from_value::<crate::model::DiagnosticContext>(value.clone())
+        .map_err(|error| error.to_string())?;
+    value["contextBasisFingerprint"] =
+        serde_json::json!(crate::model::diagnostic_context_basis_fingerprint(&provisional));
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 fn legacy_event(

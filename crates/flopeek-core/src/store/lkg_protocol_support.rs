@@ -6,10 +6,10 @@
 
 use crate::model::{
     EvidenceContract, LastKnownGoodApplicability, LastKnownGoodCandidate,
-    LastKnownGoodEvent, LastKnownGoodIntegrity, LastKnownGoodProposalRequest,
+    LastKnownGoodEvent, LastKnownGoodHistory, LastKnownGoodIntegrity, LastKnownGoodProposalRequest,
     LastKnownGoodReviewPacket, LastKnownGoodState, LastKnownGoodTransitionRequest,
     LKG_CANDIDATE_SCHEMA, LKG_EVENT_SCHEMA, LKG_INTEGRITY_COMPLETE,
-    LKG_INTEGRITY_PARTIAL, LKG_REVIEW_PACKET_SCHEMA,
+    LKG_HISTORY_SCHEMA, LKG_INTEGRITY_PARTIAL, LKG_REVIEW_PACKET_SCHEMA,
     reduce_last_known_good,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -256,10 +256,10 @@ fn candidate_for_request(
         )
     };
     let id_material = format!(
-        "flopeek-lkg-candidate/v1\0{}\0{}\0{}\0{}\0{}\0{}",
+        "flopeek-lkg-candidate/v2\0{}\0{}\0{}\0{}\0{}\0{}",
         identity.project_id,
         request.context_id,
-        context.revision,
+        context.context_basis_fingerprint,
         resolved_revision,
         expected,
         request.idempotency_key
@@ -270,7 +270,8 @@ fn candidate_for_request(
         repository_id,
         project_id: identity.project_id,
         context_id: request.context_id.clone(),
-        context_revision: context.revision,
+        context_definition_revision: context.context_definition_revision,
+        context_basis_fingerprint: context.context_basis_fingerprint.clone(),
         expected_behavior_fingerprint: expected,
         git_revision: resolved_revision,
         observation_id,
@@ -282,37 +283,6 @@ fn candidate_for_request(
         reason: request.reason.clone(),
         integrity,
     })
-}
-
-fn proposal_retry_matches(
-    transaction: &Transaction<'_>,
-    root: &Path,
-    request: &LastKnownGoodProposalRequest,
-    event: &LastKnownGoodEvent,
-    candidate: &LastKnownGoodCandidate,
-) -> Result<bool, String> {
-    if event.event_type != "PROPOSE"
-        || event.actor != request.actor
-        || event.reason != request.reason
-        || event.evidence != request.evidence
-        || event.predecessor_event_id != request.expected_tip_event_id
-    {
-        return Ok(false);
-    }
-    let context = context_snapshot(transaction, &request.context_id)?;
-    let identity = crate::identity::resolve(root)?;
-    let resolved_revision = match crate::diagnostic::resolve_last_known_good_revision(
-        root,
-        &request.git_revision,
-    ) {
-        Ok(value) => value,
-        Err(_) => return Ok(false),
-    };
-    Ok(candidate.project_id == identity.project_id
-        && candidate.context_revision == context.revision
-        && candidate.expected_behavior_fingerprint
-            == crate::model::expected_behavior_fingerprint(&context.expected_behavior)
-        && candidate.git_revision == resolved_revision)
 }
 
 fn check_expected_tip(

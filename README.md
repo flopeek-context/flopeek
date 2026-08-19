@@ -137,7 +137,7 @@ and unresolved limitations. Historical snapshots include bounded package
 manifest metadata so entry changes can be reported as candidates without
 claiming causality.
 
-Last-known-good follows `flopeek-lkg-protocol/v1` and is split into an immutable
+Last-known-good follows `flopeek-lkg-protocol/v2` and is split into an immutable
 `LastKnownGoodCandidate`, append-only `LastKnownGoodEvent`, and pure reduced
 `LastKnownGoodState`. Candidates are derived by Flopeek from the Context, full
 Git SHA, observation-owned graph basis, expected-behavior fingerprint, and
@@ -152,7 +152,10 @@ candidate, revocation clears it, and replacement confirmation records the active
 candidate as `replacesCandidateId`. Every confirmation requires a pending
 candidate; direct confirmation is rejected. Raw JSONL is an untrusted transport: it can
 propose but cannot perform human-only transitions even when it sends
-`actorKind = human`. Use the trusted local CLI (`flopeek lkg propose|review|confirm|reject|revoke|get|history`), where actor identity is caller-attributed rather than authenticated.
+`actorKind = human`. The trusted local process API owns those transitions and
+the local CLI (`flopeek lkg propose|review|confirm|reject|revoke|get|history`)
+is its official human-facing surface. Actor identity is caller-attributed rather
+than authenticated; this is not a cryptographic security boundary.
 
 The Review Packet selects the pending candidate before the active candidate. Its
 `applicability` describes that selected review candidate, while
@@ -162,15 +165,29 @@ stream. Protocol candidates remain the authority for diagnosis; compatibility
 `lastKnownGoodBinding` is not synthesized, so a proposer is never presented as
 the human confirmer. Confirmation attribution remains on the `CONFIRM` event.
 
+Diagnostic Context definition and engineering-memory progress are independent.
+`contextDefinitionRevision` and a canonical definition fingerprint bind LKG
+applicability, while `memoryRevision` advances when assertions are appended.
+Adding an observation, hypothesis, finding, remediation, or verification does
+not invalidate an otherwise applicable LKG. Changing expected behavior, focus,
+or another definition field produces `context-basis-mismatch`.
+
 Exact revision authority comes from `graph_observations.git_revision`, not
 `graph_versions.source_revision`. Applicability is recomputed against the
-current Context revision and current HEAD first-parent lineage, with explicit
-`out-of-lineage`, `context-revision-mismatch`, `basis-unavailable`, and
-`contract-incompatible` statuses. Idempotent retries require the same payload;
-stale lifecycle tips and conflicting idempotency keys fail closed. Legacy v2
-bindings remain read-only evidence and ambiguous migration semantics are
-quarantined. Historical diagnosis consumes only complete, applicable active
-candidates and never labels a candidate a cause or root cause.
+current Context basis and current HEAD first-parent lineage, with explicit
+`out-of-lineage`, `context-basis-mismatch`, `basis-unavailable`, and
+`contract-incompatible` statuses. Active-but-inapplicable candidates remain
+visible in diagnosis and packets, but no Git range is inspected from them.
+
+Idempotency is based on a persisted fingerprint of the original typed command
+before mutable Context or Git resolution. An identical retry returns the
+original Candidate or Event even when `HEAD`, memory revision, or lifecycle tip
+has advanced; conflicting payloads fail closed. LKG history is bounded and
+ordered by `predecessorEventId`, with timestamps treated only as display
+metadata. Legacy events without a provable request receipt are not guessed.
+Legacy v2 bindings remain read-only evidence and ambiguous migration semantics
+are quarantined. Historical diagnosis never labels a candidate a cause or root
+cause.
 
 Graph reuse for detached historical observations validates structural graph
 evidence—metadata/contracts, canonical resolution and entry evidence, nodes,

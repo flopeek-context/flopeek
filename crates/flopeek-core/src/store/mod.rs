@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_DIRECTORY: &str = ".flopeek";
 pub const STORE_FILENAME: &str = "flopeek.sqlite3";
-pub const CURRENT_USER_VERSION: i64 = 12;
+pub const CURRENT_USER_VERSION: i64 = 13;
 
 mod change;
 mod continuity;
@@ -43,7 +43,7 @@ pub use last_known_good::{
     create_last_known_good_binding, get_last_known_good, list_last_known_good_history,
     validate_last_known_good,
 };
-pub(crate) use lkg_protocol::confirmed_protocol_candidate;
+pub(crate) use lkg_protocol::active_protocol_evaluation;
 pub use lkg_protocol::{
     confirm_last_known_good_local, get_last_known_good_protocol, get_last_known_good_review_packet,
     list_last_known_good_protocol, propose_last_known_good, reject_last_known_good_local,

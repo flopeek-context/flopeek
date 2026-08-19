@@ -8,11 +8,12 @@ use super::{EvidenceContract, EvidenceReference, GraphBasis};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const LKG_CANDIDATE_SCHEMA: &str = "flopeek-last-known-good-candidate/v1";
+pub const LKG_CANDIDATE_SCHEMA: &str = "flopeek-last-known-good-candidate/v2";
 pub const LKG_EVENT_SCHEMA: &str = "flopeek-last-known-good-event/v1";
-pub const LKG_STATE_SCHEMA: &str = "flopeek-last-known-good-state/v1";
-pub const LKG_REVIEW_PACKET_SCHEMA: &str = "flopeek-last-known-good-review-packet/v1";
-pub const LKG_PROTOCOL_SCHEMA: &str = "flopeek-lkg-protocol/v1";
+pub const LKG_STATE_SCHEMA: &str = "flopeek-last-known-good-state/v2";
+pub const LKG_REVIEW_PACKET_SCHEMA: &str = "flopeek-last-known-good-review-packet/v2";
+pub const LKG_PROTOCOL_SCHEMA: &str = "flopeek-lkg-protocol/v2";
+pub const LKG_HISTORY_SCHEMA: &str = "flopeek-last-known-good-history/v1";
 
 pub fn expected_behavior_fingerprint(expected_behavior: &str) -> String {
     let mut hasher = Sha256::new();
@@ -51,7 +52,8 @@ pub struct LastKnownGoodCandidate {
     pub repository_id: String,
     pub project_id: String,
     pub context_id: String,
-    pub context_revision: u64,
+    pub context_definition_revision: u64,
+    pub context_basis_fingerprint: String,
     pub expected_behavior_fingerprint: String,
     pub git_revision: String,
     #[serde(default)]
@@ -131,6 +133,24 @@ pub struct LastKnownGoodReviewPacket {
     #[serde(default)]
     pub structural_delta: Option<serde_json::Value>,
     pub confirmable: bool,
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct LastKnownGoodHistory {
+    pub schema_version: String,
+    pub status: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    pub context_id: String,
+    #[serde(default)]
+    pub tip_event_id: Option<String>,
+    pub total_events: usize,
+    pub events: Vec<LastKnownGoodEvent>,
+    pub truncated: bool,
+    pub omissions: Vec<String>,
     pub limitations: Vec<String>,
 }
 

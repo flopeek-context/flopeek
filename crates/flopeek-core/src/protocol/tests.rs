@@ -173,10 +173,12 @@ fn last_known_good_jsonl_methods_round_trip_with_human_confirmation() {
         "observationId": graph["observation_id"]
     });
     let context = json!({
-        "schemaVersion": "flopeek-diagnostic-context/v6",
+        "schemaVersion": "flopeek-diagnostic-context/v7",
         "id": "jsonl-lkg-context",
         "projectId": scan["result"]["project_id"],
-        "revision": 0,
+        "contextDefinitionRevision": 0,
+        "contextBasisFingerprint": "",
+        "memoryRevision": 0,
         "intent": "diagnose",
         "symptom": "timeout",
         "expectedBehavior": "completes",
@@ -246,7 +248,9 @@ fn last_known_good_jsonl_methods_round_trip_with_human_confirmation() {
         json!({"contextId": "jsonl-lkg-context"}),
     );
     assert_eq!(
-        canonical_history["result"].as_array().map(Vec::len),
+        canonical_history["result"]["events"]
+            .as_array()
+            .map(Vec::len),
         Some(1)
     );
     let canonical_validation = serve_one(
@@ -357,10 +361,12 @@ fn flow_and_diagnostic_jsonl_methods_are_end_to_end_and_body_free() {
         "observationId": graph["observation_id"],
     });
     let context = json!({
-        "schemaVersion": "flopeek-diagnostic-context/v6",
+        "schemaVersion": "flopeek-diagnostic-context/v7",
         "id": "jsonl-flow-context",
         "projectId": scan["project_id"],
-        "revision": 0,
+        "contextDefinitionRevision": 0,
+        "contextBasisFingerprint": "",
+        "memoryRevision": 0,
         "intent": "diagnose",
         "symptom": "static flow changed",
         "expectedBehavior": "entry remains explicit",

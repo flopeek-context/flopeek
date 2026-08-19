@@ -1,5 +1,6 @@
 //! Stable, JSON-safe data structures shared by the core domains.
 
+mod context_basis;
 mod diagnostic;
 mod flow;
 mod graph;
@@ -10,6 +11,7 @@ mod temporal;
 mod temporal_delta;
 mod typescript;
 
+pub use context_basis::*;
 pub use diagnostic::*;
 pub use flow::*;
 pub use graph::*;

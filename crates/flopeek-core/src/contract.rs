@@ -34,8 +34,13 @@ pub fn validate() -> Result<(), String> {
         || value["humanActorIdentity"] != "caller-attributed-not-authenticated"
         || value["lastKnownGoodModel"] != "immutable-candidate-append-only-event-reduced-state"
         || value["lastKnownGoodIntegrity"] != "observation-owned-revision-and-graph-contract"
-        || value["lastKnownGoodApplicability"] != "current-first-parent-and-context-revision"
-        || value["lastKnownGoodTrust"] != "local-transition-boundary-caller-attributed"
+        || value["lastKnownGoodApplicability"] != "current-first-parent-and-context-basis"
+        || value["lastKnownGoodTrust"] != "trusted-local-transition-surface-caller-attributed"
+        || value["diagnosticContextBasis"] != "canonical-definition-fingerprint"
+        || value["engineeringMemoryRevision"] != "assertion-stream-only"
+        || value["lastKnownGoodContextBinding"] != "context-basis-and-expected-behavior"
+        || value["lastKnownGoodIdempotency"] != "immutable-request-receipt"
+        || value["lastKnownGoodHistoryOrder"] != "predecessor-event-chain"
         || value["productIdentity"] != "versioned-repository-context"
         || value["graphRole"] != "deterministic-substrate"
         || value["languageCountIsProductGoal"] != false
@@ -64,11 +69,13 @@ pub fn validate_lkg_protocol() -> Result<(), String> {
 }
 
 fn validate_lkg_protocol_value(value: &Value) -> Result<(), String> {
-    if value["schemaVersion"] != "flopeek-lkg-protocol/v1"
-        || value["candidate"]["schemaVersion"] != "flopeek-last-known-good-candidate/v1"
+    if value["schemaVersion"] != "flopeek-lkg-protocol/v2"
+        || value["candidate"]["schemaVersion"] != "flopeek-last-known-good-candidate/v2"
+        || value["candidate"]["contextBinding"]
+            != "context-definition-revision-and-canonical-basis-fingerprint"
         || value["event"]["schemaVersion"] != "flopeek-last-known-good-event/v1"
-        || value["state"]["schemaVersion"] != "flopeek-last-known-good-state/v1"
-        || value["reviewPacket"]["schemaVersion"] != "flopeek-last-known-good-review-packet/v1"
+        || value["state"]["schemaVersion"] != "flopeek-last-known-good-state/v2"
+        || value["reviewPacket"]["schemaVersion"] != "flopeek-last-known-good-review-packet/v2"
         || value["reviewPacket"]["includes"]
             != serde_json::json!([
                 "context",
@@ -126,6 +133,13 @@ fn validate_lkg_protocol_value(value: &Value) -> Result<(), String> {
             })
         || value["concurrency"]["expectedTipRequired"] != true
         || value["concurrency"]["idempotencyRequired"] != true
+        || value["concurrency"]["requestIdentity"]
+            != "canonical-original-typed-request-before-mutable-resolution"
+        || value["concurrency"]["retryBehavior"] != "return-original-result-without-revalidation"
+        || value["history"]["orderAuthority"] != "predecessor-event-chain"
+        || value["contextInterop"]["memoryRevision"] != "assertion-stream-only"
+        || value["contextInterop"]["diagnosisPreservesActiveInapplicable"] != true
+        || value["trust"]["humanTransitions"] != serde_json::json!(["trusted-local-process-api"])
         || value["trust"]["actorIdentity"] != "caller-attributed-not-authenticated"
         || value["validation"]["revisionAuthority"] != "graph_observations.git_revision"
         || value["validation"]["graphVersionSourceRevisionAuthority"] != false
@@ -162,6 +176,31 @@ mod tests {
                 .expect("protocol contract");
         value["reviewPacket"]["candidateSelection"] =
             serde_json::json!("active-first-otherwise-pending");
+        assert!(super::validate_lkg_protocol_value(&value).is_err());
+
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../../../contracts/lkg-protocol.json"))
+                .expect("protocol contract");
+        value["contextInterop"]["memoryRevision"] =
+            serde_json::json!("diagnostic-context-revision");
+        assert!(super::validate_lkg_protocol_value(&value).is_err());
+
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../../../contracts/lkg-protocol.json"))
+                .expect("protocol contract");
+        value["concurrency"]["requestIdentity"] = serde_json::json!("mutable-resolved-state");
+        assert!(super::validate_lkg_protocol_value(&value).is_err());
+
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../../../contracts/lkg-protocol.json"))
+                .expect("protocol contract");
+        value["history"]["orderAuthority"] = serde_json::json!("created-at");
+        assert!(super::validate_lkg_protocol_value(&value).is_err());
+
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("../../../contracts/lkg-protocol.json"))
+                .expect("protocol contract");
+        value["trust"]["humanTransitions"] = serde_json::json!(["untrusted-jsonl"]);
         assert!(super::validate_lkg_protocol_value(&value).is_err());
     }
 }

@@ -119,7 +119,9 @@ fn context_for(root: &Path) -> (DiagnosticContext, String) {
         schema_version: DIAGNOSTIC_CONTEXT_SCHEMA.to_string(),
         id: "checkout-timeout".to_string(),
         project_id: result.project_id,
-        revision: 0,
+        context_definition_revision: 0,
+        context_basis_fingerprint: String::new(),
+        memory_revision: 0,
         intent: "diagnose".to_string(),
         symptom: "checkout intermittently times out".to_string(),
         expected_behavior: "checkout completes once within the configured timeout".to_string(),
@@ -560,7 +562,9 @@ fn flow_focused_history_and_packet_keep_exact_evidence_and_candidate_language() 
         schema_version: DIAGNOSTIC_CONTEXT_SCHEMA.to_string(),
         id: "flow-focused-context".to_string(),
         project_id: result.project_id,
-        revision: 0,
+        context_definition_revision: 0,
+        context_basis_fingerprint: String::new(),
+        memory_revision: 0,
         intent: "diagnose".to_string(),
         symptom: "the static entry target changed".to_string(),
         expected_behavior: "the declared entry remains stable".to_string(),
@@ -666,7 +670,7 @@ fn assertion_lifecycle_is_versioned_and_evidence_classes_stay_separate() {
         },
     )
     .expect("assertion");
-    assert_eq!(first.revision, 2);
+    assert_eq!(first.revision, 1);
     let second = store::append_diagnostic_assertion(
         &root,
         DiagnosticAssertion {
@@ -688,12 +692,12 @@ fn assertion_lifecycle_is_versioned_and_evidence_classes_stay_separate() {
         },
     )
     .expect("finding");
-    assert_eq!(second.revision, 3);
+    assert_eq!(second.revision, 2);
     assert_eq!(
         store::get_diagnostic_context(&root, &context.id)
             .expect("context")
-            .revision,
-        3
+            .memory_revision,
+        2
     );
     assert_eq!(
         store::list_diagnostic_assertions(&root, &context.id)
