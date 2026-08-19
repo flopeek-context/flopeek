@@ -163,6 +163,108 @@ fn observation_delta_preserves_same_graph_and_a_b_a_adjacency() {
 }
 
 #[test]
+fn observation_delta_uses_immutable_manifest_for_comment_only_source_changes() {
+    let root = fixture_root();
+    let (snapshot, facts_a) = graph::build(&root).expect("build A");
+    let first = persist_scan(&root, snapshot, &facts_a).expect("persist A");
+    fs::write(
+        root.join("src/main.ts"),
+        "export const main = 1;\n// observation-only comment\n",
+    )
+    .expect("comment-only source");
+    let (snapshot, facts_b) = graph::build(&root).expect("build B");
+    let second = persist_scan(&root, snapshot, &facts_b).expect("persist B");
+    assert_eq!(first.graph.graph_id, second.graph.graph_id);
+    assert_eq!(first.graph.graph_version, second.graph.graph_version);
+
+    let connection = open(&root).expect("open");
+    let manifest_for = |observation_id: &str| {
+        connection
+            .query_row(
+                "SELECT source_manifest_json FROM graph_observations
+                 WHERE observation_id = ?1",
+                params![observation_id],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("manifest value")
+    };
+    let first_files = serde_json::from_str::<Vec<crate::model::SourceFile>>(&manifest_for(
+        &first.graph.observation_id,
+    ))
+    .expect("first manifest");
+    let second_files = serde_json::from_str::<Vec<crate::model::SourceFile>>(&manifest_for(
+        &second.graph.observation_id,
+    ))
+    .expect("second manifest");
+    assert_ne!(first_files, second_files);
+    let first_facts_json = serde_json::to_string(&facts_a[0]).expect("first facts json");
+    connection
+        .execute(
+            "UPDATE source_files SET facts_json = ?1",
+            params![first_facts_json],
+        )
+        .expect("rematerialize stale graph facts");
+    drop(connection);
+    let current = current_graph(&root)
+        .expect("current graph from observation manifest")
+        .expect("current graph");
+    assert_eq!(current.files, second_files);
+
+    let delta = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+        .expect("comment-only delta");
+    assert_eq!(delta.status, "complete");
+    assert_eq!(delta.graph_relation, "same-structural-graph");
+    assert_eq!(delta.basis_relations.typescript_source, "changed");
+    assert_eq!(delta.counts.source_changed, 1);
+    assert_eq!(delta.counts.node_added, 0);
+    assert_eq!(delta.counts.node_changed, 0);
+    assert_eq!(delta.counts.node_removed, 0);
+    assert_eq!(delta.counts.edge_added, 0);
+    assert_eq!(delta.counts.edge_removed, 0);
+    assert_eq!(delta.counts.flow_added, 0);
+    assert_eq!(delta.counts.flow_changed, 0);
+    assert_eq!(delta.counts.flow_removed, 0);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn invalid_observation_manifests_are_unavailable_without_structural_guessing() {
+    for invalid_manifest in [
+        "not-json".to_string(),
+        r#"[{"path":"src/main.ts","language":"typescript","bytes":1,"hash":"a"},{"path":"src/main.ts","language":"typescript","bytes":1,"hash":"b"}]"#.to_string(),
+        r#"[{"path":"/absolute.ts","language":"typescript","bytes":1,"hash":"a"}]"#.to_string(),
+    ] {
+        let root = fixture_root();
+        let (snapshot, facts) = graph::build(&root).expect("build A");
+        persist_scan(&root, snapshot, &facts).expect("persist A");
+        fs::write(root.join("README.md"), "observation B\n").expect("README");
+        let (snapshot, facts) = graph::build(&root).expect("build B");
+        persist_scan(&root, snapshot, &facts).expect("persist B");
+        let connection = open(&root).expect("open");
+        let predecessor = connection
+            .query_row(
+                "SELECT observation_id FROM graph_observations ORDER BY observed_at, observation_id LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("predecessor observation");
+        connection
+            .execute(
+                "UPDATE graph_observations SET source_manifest_json = ?1 WHERE observation_id = ?2",
+                params![invalid_manifest, predecessor],
+            )
+            .expect("corrupt source manifest");
+        drop(connection);
+        let delta = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+            .expect("invalid manifest delta");
+        assert_eq!(delta.status, "unavailable");
+        assert_eq!(delta.reason, "observation-source-manifest-invalid");
+        assert_eq!(delta.graph_relation, "unavailable");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+}
+
+#[test]
 fn observation_delta_rejects_legacy_contracts_and_wrong_project_events() {
     let root = fixture_root();
     let (snapshot, facts) = graph::build(&root).expect("build A");
@@ -250,7 +352,7 @@ fn observation_delta_reports_corrupt_contract_metadata_explicitly() {
 }
 
 #[test]
-fn moved_exact_node_is_superseded_and_ambiguous_successors_stay_stale() {
+fn moved_exact_node_is_a_stale_candidate_and_ambiguous_successors_stay_stale() {
     let root = fixture_root();
     let (snapshot, facts) = graph::build(&root).expect("build origin");
     let first = persist_scan(&root, snapshot, &facts).expect("persist origin");
@@ -270,21 +372,21 @@ fn moved_exact_node_is_superseded_and_ambiguous_successors_stay_stale() {
     let (snapshot, facts) = graph::build(&root).expect("build moved");
     persist_scan(&root, snapshot, &facts).expect("persist moved");
     let moved = resolve_context(&root, &origin.uri).expect("resolve moved origin");
-    assert_eq!(moved.status, "superseded");
+    assert_eq!(moved.status, "stale");
     assert_eq!(
         moved.freshness_reason,
-        "unique-exact-compatible-fingerprint"
+        "unique-exact-compatible-fingerprint-candidate"
     );
-    assert!(moved.successor_uri.is_some());
+    assert!(moved.successor_uri.is_none());
     assert_eq!(moved.origin_observation_id, origin.origin_observation_id);
     let reconciliation = reconcile_context(&root, &origin.uri).expect("reconcile moved origin");
     assert_eq!(
         reconciliation.schema_version,
         crate::model::CONTEXT_RECONCILIATION_SCHEMA
     );
-    assert_eq!(reconciliation.status, "superseded");
+    assert_eq!(reconciliation.status, "stale");
     assert_eq!(reconciliation.candidates.len(), 1);
-    assert_eq!(reconciliation.successor, moved.successor_uri);
+    assert!(reconciliation.successor.is_none());
 
     let root = fixture_root();
     let (snapshot, facts) = graph::build(&root).expect("build ambiguous origin");
@@ -308,6 +410,61 @@ fn moved_exact_node_is_superseded_and_ambiguous_successors_stay_stale() {
     let ambiguous = resolve_context(&root, &origin.uri).expect("resolve ambiguous");
     assert_eq!(ambiguous.status, "stale");
     assert_eq!(ambiguous.freshness_reason, "exact-successor-ambiguous");
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn preexisting_identical_nodes_remain_stale_candidates_without_successor_proof() {
+    let root = fixture_root();
+    fs::remove_file(root.join("src/main.ts")).expect("remove default source");
+    fs::write(root.join("src/a.ts"), "export const value = 1;\n").expect("write a");
+    fs::write(root.join("src/b.ts"), "export const value = 1;\n").expect("write b");
+    let (snapshot, facts) = graph::build(&root).expect("build origin");
+    let first = persist_scan(&root, snapshot, &facts).expect("persist origin");
+    let origin = first
+        .context_refs
+        .iter()
+        .find(|reference| {
+            first.graph.nodes.iter().any(|node| {
+                node.id == reference.node_id
+                    && node.path.as_deref() == Some("src/a.ts")
+                    && node.name.as_deref() == Some("value")
+            })
+        })
+        .expect("a value ref")
+        .clone();
+    fs::remove_file(root.join("src/a.ts")).expect("remove a");
+    let (snapshot, facts) = graph::build(&root).expect("build successor");
+    persist_scan(&root, snapshot, &facts).expect("persist successor");
+
+    let resolved = resolve_context(&root, &origin.uri).expect("resolve stale origin");
+    assert_eq!(resolved.status, "stale");
+    assert_eq!(
+        resolved.freshness_reason,
+        "unique-exact-compatible-fingerprint-candidate"
+    );
+    assert!(resolved.successor_uri.is_none());
+    let reconciliation = reconcile_context(&root, &origin.uri).expect("reconcile stale origin");
+    assert_eq!(reconciliation.status, "stale");
+    assert_eq!(
+        reconciliation.reason,
+        "unique-exact-compatible-fingerprint-candidate"
+    );
+    assert!(reconciliation.successor.is_none());
+    assert_eq!(reconciliation.candidates.len(), 1);
+    let candidate =
+        resolve_context(&root, &reconciliation.candidates[0]).expect("resolve candidate");
+    assert_eq!(candidate.status, "current");
+    let connection = open(&root).expect("open candidate");
+    let candidate_path = connection
+        .query_row(
+            "SELECT path FROM graph_nodes WHERE graph_version = ?1 AND node_id = ?2",
+            params![candidate.graph_version as i64, candidate.node_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .expect("candidate path");
+    assert_eq!(candidate_path.as_deref(), Some("src/b.ts"));
+    drop(connection);
     fs::remove_dir_all(root).expect("cleanup");
 }
 

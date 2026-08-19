@@ -365,6 +365,17 @@ observation O41
 
 This distinction is required.
 
+Exact source evidence belongs to the immutable observation that recorded it.
+`graph_versions` and their `source_files` rows are structural graph
+materialization and may be reused or rebuilt for an equivalent graph; they are
+not historical exact-source authority. Cross-observation source comparison
+must use the observation-owned source manifest.
+
+The current `project_id` is checkout-local because it is derived from the
+canonical local checkout path. Before cross-machine context sharing, define a
+stable repository identity separately from checkout identity. Do not infer
+repository identity from a mutable Git remote URL alone.
+
 ### 7.4 Diagnostic revision
 
 Engineering understanding has its own lifecycle.
@@ -440,6 +451,11 @@ unresolved
 unavailable
 wrong-project
 ```
+
+`superseded` is reserved for a proven successor established by deterministic
+lineage or explicit attributed verification. A unique compatible fingerprint
+is a reconciliation candidate and remains `stale`; it is not proof of rename,
+continuity, semantic equivalence, or business intent.
 
 Do not silently reinterpret stale evidence as current.
 
@@ -988,20 +1004,15 @@ Required concepts include:
   "llmRequired": false,
   "javascriptRepositoryAuthority": false,
   "automaticRootCauseClaims": false,
-  "graphIdentityBasis": "typescript-structural-evidence",
+  "graphIdentityBasis": "typescript-context-structural-evidence",
   "sourceBasis": "immutable-graph-observation",
-  "contextFreshness": "node-ast-and-direct-edges"
-}
-```
-
-Recommended additional product-identity invariants:
-
-```json
-{
+  "contextFreshness": "node-ast-and-direct-edges",
   "productIdentity": "versioned-repository-context",
   "graphRole": "deterministic-substrate",
   "languageCountIsProductGoal": false,
-  "reviewGraphIsPrimaryProduct": false
+  "reviewGraphIsPrimaryProduct": false,
+  "contextReconciliation": "exact-compatible-fingerprint-candidates",
+  "automaticSupersession": "disabled-without-lineage-proof"
 }
 ```
 

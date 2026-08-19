@@ -26,6 +26,7 @@ mod continuity;
 mod graph_validation;
 mod memory;
 mod migrations;
+mod observation;
 mod query;
 mod scan;
 #[cfg(test)]

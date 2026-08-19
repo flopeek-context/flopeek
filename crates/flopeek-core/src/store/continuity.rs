@@ -269,7 +269,7 @@ pub fn reconcile_context(root: &Path, uri: &str) -> Result<ContextReconciliation
         truncated,
         omissions,
         limitations: vec![
-            "Automatic supersession is exact fingerprint-contract equivalence only; it does not claim semantic rename, runtime equivalence, or business intent.".to_string(),
+            "Exact-compatible fingerprint matches are stale reconciliation candidates; they do not claim semantic rename, runtime equivalence, or business intent.".to_string(),
             "Candidates are derived from immutable graph observations and canonical refs; no guessed mapping is stored.".to_string(),
         ],
         reference,
