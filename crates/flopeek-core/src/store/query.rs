@@ -131,6 +131,7 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         graph_version,
         source_revision,
         source_fingerprint,
+        source_manifest_json,
         observation_id,
         module_resolution_status,
         module_resolution_fingerprint,
@@ -147,7 +148,8 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
             "SELECT graph.graph_id, graph.graph_version,
                     CASE WHEN observation.dirty = 1 THEN observation.git_revision || '+dirty'
                          ELSE observation.git_revision END,
-                     observation.source_fingerprint, observation.observation_id,
+                     observation.source_fingerprint, observation.source_manifest_json,
+                     observation.observation_id,
                      observation.module_resolution_status,
                      observation.module_resolution_fingerprint,
                      observation.module_resolution_effective_fingerprint,
@@ -177,8 +179,9 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
                     row.get::<_, String>(10)?,
                     row.get::<_, String>(11)?,
                     row.get::<_, String>(12)?,
-                    row.get::<_, i64>(13)?,
-                    row.get::<_, String>(14)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, i64>(14)?,
+                    row.get::<_, String>(15)?,
                 ))
             },
         )
@@ -189,37 +192,29 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
     };
     let mut facts = Vec::new();
     let mut legacy_facts = false;
-    let files = connection
+    let fact_rows = connection
         .prepare(
-            "SELECT path, language, bytes, hash, facts_json FROM source_files
+            "SELECT path, facts_json FROM source_files
              WHERE graph_version = ?1 ORDER BY path",
         )
         .map_err(|error| format!("Unable to prepare source query: {error}"))?
         .query_map(params![graph_version], |row| {
-            Ok((
-                SourceFile {
-                    path: row.get(0)?,
-                    language: row.get(1)?,
-                    bytes: row.get::<_, i64>(2)? as u64,
-                    hash: row.get(3)?,
-                },
-                row.get::<_, String>(4)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
         .map_err(|error| format!("Unable to query source evidence: {error}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("Unable to decode source evidence: {error}"))?;
-    let mut files = files
-        .into_iter()
-        .map(|(file, facts_json)| {
-            let fact = serde_json::from_str::<TypeScriptFacts>(&facts_json)
-                .map_err(|error| format!("Unable to decode TypeScript facts: {error}"))?;
-            legacy_facts |= fact.schema_version != crate::model::TYPESCRIPT_FACTS_SCHEMA
-                || fact.parser != crate::typescript::PARSER_IDENTITY;
-            facts.push(fact);
-            Ok(file)
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+    for (path, facts_json) in fact_rows {
+        let fact = serde_json::from_str::<TypeScriptFacts>(&facts_json)
+            .map_err(|error| format!("Unable to decode TypeScript facts: {error}"))?;
+        if fact.path != path {
+            return Err("Persisted TypeScript facts path conflicts with source row.".to_string());
+        }
+        legacy_facts |= fact.schema_version != crate::model::TYPESCRIPT_FACTS_SCHEMA
+            || fact.parser != crate::typescript::PARSER_IDENTITY;
+        facts.push(fact);
+    }
+    let mut files = crate::store::observation::decode_source_manifest(&source_manifest_json)?;
     let mut nodes = connection
         .prepare(
             "SELECT node_id, kind, path, name, language, evidence_fingerprint FROM graph_nodes

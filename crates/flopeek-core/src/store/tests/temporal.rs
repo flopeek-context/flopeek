@@ -163,6 +163,105 @@ fn observation_delta_preserves_same_graph_and_a_b_a_adjacency() {
 }
 
 #[test]
+fn observation_delta_uses_immutable_manifest_for_comment_only_source_changes() {
+    let root = fixture_root();
+    let (snapshot, facts_a) = graph::build(&root).expect("build A");
+    let first = persist_scan(&root, snapshot, &facts_a).expect("persist A");
+    fs::write(
+        root.join("src/main.ts"),
+        "export const main = 1;\n// observation-only comment\n",
+    )
+    .expect("comment-only source");
+    let (snapshot, facts_b) = graph::build(&root).expect("build B");
+    let second = persist_scan(&root, snapshot, &facts_b).expect("persist B");
+    assert_eq!(first.graph.graph_id, second.graph.graph_id);
+    assert_eq!(first.graph.graph_version, second.graph.graph_version);
+
+    let connection = open(&root).expect("open");
+    let manifests = connection
+        .prepare(
+            "SELECT source_manifest_json FROM graph_observations
+             ORDER BY observed_at, observation_id",
+        )
+        .expect("manifest query")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("manifest rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("manifest values");
+    assert_eq!(manifests.len(), 2);
+    let first_files = serde_json::from_str::<Vec<crate::model::SourceFile>>(&manifests[0])
+        .expect("first manifest");
+    let second_files = serde_json::from_str::<Vec<crate::model::SourceFile>>(&manifests[1])
+        .expect("second manifest");
+    assert_ne!(first_files, second_files);
+    let first_facts_json = serde_json::to_string(&facts_a[0]).expect("first facts json");
+    connection
+        .execute(
+            "UPDATE source_files SET facts_json = ?1",
+            params![first_facts_json],
+        )
+        .expect("rematerialize stale graph facts");
+    drop(connection);
+    let current = current_graph(&root)
+        .expect("current graph from observation manifest")
+        .expect("current graph");
+    assert_eq!(current.files, second_files);
+
+    let delta = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+        .expect("comment-only delta");
+    assert_eq!(delta.status, "complete");
+    assert_eq!(delta.graph_relation, "same-structural-graph");
+    assert_eq!(delta.basis_relations.typescript_source, "changed");
+    assert_eq!(delta.counts.source_changed, 1);
+    assert_eq!(delta.counts.node_added, 0);
+    assert_eq!(delta.counts.node_changed, 0);
+    assert_eq!(delta.counts.node_removed, 0);
+    assert_eq!(delta.counts.edge_added, 0);
+    assert_eq!(delta.counts.edge_removed, 0);
+    assert_eq!(delta.counts.flow_added, 0);
+    assert_eq!(delta.counts.flow_changed, 0);
+    assert_eq!(delta.counts.flow_removed, 0);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn invalid_observation_manifests_are_unavailable_without_structural_guessing() {
+    for invalid_manifest in [
+        "not-json".to_string(),
+        r#"[{"path":"src/main.ts","language":"typescript","bytes":1,"hash":"a"},{"path":"src/main.ts","language":"typescript","bytes":1,"hash":"b"}]"#.to_string(),
+        r#"[{"path":"/absolute.ts","language":"typescript","bytes":1,"hash":"a"}]"#.to_string(),
+    ] {
+        let root = fixture_root();
+        let (snapshot, facts) = graph::build(&root).expect("build A");
+        persist_scan(&root, snapshot, &facts).expect("persist A");
+        fs::write(root.join("README.md"), "observation B\n").expect("README");
+        let (snapshot, facts) = graph::build(&root).expect("build B");
+        persist_scan(&root, snapshot, &facts).expect("persist B");
+        let connection = open(&root).expect("open");
+        let predecessor = connection
+            .query_row(
+                "SELECT observation_id FROM graph_observations ORDER BY observed_at, observation_id LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("predecessor observation");
+        connection
+            .execute(
+                "UPDATE graph_observations SET source_manifest_json = ?1 WHERE observation_id = ?2",
+                params![invalid_manifest, predecessor],
+            )
+            .expect("corrupt source manifest");
+        drop(connection);
+        let delta = get_observation_delta(&root, None, crate::temporal::DeltaLimits::default())
+            .expect("invalid manifest delta");
+        assert_eq!(delta.status, "unavailable");
+        assert_eq!(delta.reason, "observation-source-manifest-invalid");
+        assert_eq!(delta.graph_relation, "unavailable");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+}
+
+#[test]
 fn observation_delta_rejects_legacy_contracts_and_wrong_project_events() {
     let root = fixture_root();
     let (snapshot, facts) = graph::build(&root).expect("build A");

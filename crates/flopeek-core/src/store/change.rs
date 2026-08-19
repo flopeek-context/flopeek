@@ -3,7 +3,7 @@
 use super::*;
 use crate::model::{
     EvidenceContract, GraphBasis, GraphEdge, GraphNode, ObservationBasisRelations,
-    ObservationDelta, ObservationDeltaCounts, SourceFile,
+    ObservationDelta, ObservationDeltaCounts,
 };
 use crate::temporal::{self, DeltaLimits, FlowFingerprint, ObservationEvidence};
 
@@ -95,7 +95,20 @@ pub fn get_observation_delta(
             true,
         ));
     }
-    let to = load_observation(&connection, &target.observation_id)?;
+    let to = match load_observation(&connection, &target.observation_id) {
+        Ok(to) => to,
+        Err(error) if error.starts_with("observation-source-manifest-invalid") => {
+            return Ok(unavailable_delta(
+                &project_id,
+                "observation-source-manifest-invalid",
+                Some(target.event_id),
+                None,
+                None,
+                false,
+            ));
+        }
+        Err(error) => return Err(error),
+    };
     let Some(to) = to else {
         return Ok(unavailable_delta(
             &project_id,
@@ -156,7 +169,20 @@ pub fn get_observation_delta(
             true,
         ));
     }
-    let from = load_observation(&connection, &predecessor.observation_id)?;
+    let from = match load_observation(&connection, &predecessor.observation_id) {
+        Ok(from) => from,
+        Err(error) if error.starts_with("observation-source-manifest-invalid") => {
+            return Ok(unavailable_delta(
+                &project_id,
+                "observation-source-manifest-invalid",
+                Some(target.event_id),
+                Some(to.basis),
+                Some(to.contract),
+                false,
+            ));
+        }
+        Err(error) => return Err(error),
+    };
     let Some(from) = from else {
         return Ok(unavailable_delta(
             &project_id,
@@ -186,6 +212,7 @@ fn load_observation(
             "SELECT observation.project_id, observation.graph_version,
                     observation.git_revision, observation.dirty,
                     observation.source_fingerprint,
+                    observation.source_manifest_json,
                     observation.module_resolution_fingerprint,
                     observation.module_resolution_effective_fingerprint,
                     observation.entry_manifest_fingerprint,
@@ -219,6 +246,7 @@ fn load_observation(
                     row.get::<_, String>(10)?,
                     row.get::<_, String>(11)?,
                     row.get::<_, String>(12)?,
+                    row.get::<_, String>(13)?,
                 ))
             },
         )
@@ -229,6 +257,7 @@ fn load_observation(
         graph_version,
         source_revision,
         source_fingerprint,
+        source_manifest_json,
         module_resolution_exact_fingerprint,
         module_resolution_effective_fingerprint,
         entry_manifest_fingerprint,
@@ -242,23 +271,7 @@ fn load_observation(
         return Ok(None);
     };
 
-    let source_files = connection
-        .prepare(
-            "SELECT path, language, bytes, hash FROM source_files
-             WHERE graph_version = ?1 ORDER BY path",
-        )
-        .map_err(|error| format!("Unable to prepare observation delta source query: {error}"))?
-        .query_map(params![graph_version], |row| {
-            Ok(SourceFile {
-                path: row.get(0)?,
-                language: row.get(1)?,
-                bytes: row.get::<_, i64>(2)? as u64,
-                hash: row.get(3)?,
-            })
-        })
-        .map_err(|error| format!("Unable to query observation delta sources: {error}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Unable to decode observation delta sources: {error}"))?;
+    let source_files = observation::decode_source_manifest(&source_manifest_json)?;
     let nodes = connection
         .prepare(
             "SELECT node_id, kind, path, name, language, evidence_fingerprint
