@@ -52,6 +52,7 @@ const ALLOWED_EVIDENCE_CLASSES: &[&str] = &[
 ];
 
 mod continuity;
+mod continuity_evidence;
 mod diagnosis;
 mod focus;
 mod git;
