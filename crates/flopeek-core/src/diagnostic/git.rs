@@ -100,6 +100,29 @@ pub(super) fn resolve_revision(root: &Path, revision: &str) -> Result<String, St
     git_output(root, &["rev-parse", "--verify", &expression])
 }
 
+pub(super) fn first_parent(root: &Path, revision: &str) -> Result<Option<String>, String> {
+    validate_revision(revision)?;
+    let expression = format!("{revision}^{{commit}}");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-list", "--parents", "-n", "1", &expression])
+        .output()
+        .map_err(|error| format!("Unable to execute bounded Git parent query: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "Bounded Git parent query failed.".to_string()
+        } else {
+            format!("Bounded Git parent query failed: {detail}")
+        });
+    }
+    let output_text = String::from_utf8_lossy(&output.stdout);
+    let mut fields = output_text.split_whitespace();
+    let _commit = fields.next();
+    Ok(fields.next().map(ToOwned::to_owned))
+}
+
 pub(super) fn git_log(
     root: &Path,
     last_known_good: &str,

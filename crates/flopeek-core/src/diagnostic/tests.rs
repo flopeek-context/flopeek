@@ -94,6 +94,63 @@ fn context_for(root: &Path) -> (DiagnosticContext, String) {
     (context, payment_ref)
 }
 
+#[test]
+fn historical_context_continuity_compares_adjacent_first_parent_without_supersession() {
+    let root = fixture_root();
+    fs::write(root.join("src/main.ts"), "export const main = 1;\n").expect("main A");
+    let first = commit(&root, "A: baseline");
+    fs::write(root.join("src/main.ts"), "export const main = 2;\n").expect("main B");
+    let second = commit(&root, "B: focused change");
+    let (snapshot, facts) = graph::build(&root).expect("build B");
+    let result = store::persist_scan(&root, snapshot, &facts).expect("persist B");
+    let reference = result
+        .context_refs
+        .iter()
+        .find(|candidate| {
+            result.graph.nodes.iter().any(|node| {
+                node.id == candidate.node_id
+                    && node.path.as_deref() == Some("src/main.ts")
+                    && node.kind == "file"
+            })
+        })
+        .expect("main ref");
+    let continuity = get_historical_context_continuity(
+        &root,
+        &reference.uri,
+        Some(&first),
+        Some(&second),
+        256,
+        512,
+        1_024,
+        128,
+    )
+    .expect("continuity");
+    assert_eq!(continuity.status, "available");
+    assert_eq!(continuity.from_revision.as_deref(), Some(first.as_str()));
+    assert_eq!(continuity.to_revision.as_deref(), Some(second.as_str()));
+    assert_eq!(continuity.basis_relations.typescript_source, "changed");
+    assert!(
+        continuity
+            .path_changes
+            .iter()
+            .any(|change| change.path == "src/main.ts" && change.status == "changed")
+    );
+    assert!(
+        continuity
+            .node_changes
+            .iter()
+            .any(|change| change.status == "changed")
+    );
+    assert!(continuity.lineage_candidates.is_empty());
+    assert!(
+        continuity
+            .limitations
+            .iter()
+            .any(|limitation| limitation.contains("not successor proof"))
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
 fn copy_fixture_tree(source: &Path, destination: &Path) {
     for entry in fs::read_dir(source).expect("fixture directory") {
         let entry = entry.expect("fixture entry");

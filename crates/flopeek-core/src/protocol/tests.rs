@@ -78,6 +78,10 @@ fn jsonl_health_is_rust_only_and_deterministic() {
         response["result"]["structuralChangeAttribution"],
         "adjacent-observation-compatible-evidence"
     );
+    assert_eq!(
+        response["result"]["repositoryIdentity"],
+        "explicit-versioned-root-manifest"
+    );
 }
 
 #[test]
@@ -88,6 +92,36 @@ fn invalid_jsonl_is_an_explicit_error() {
     let response: Value = serde_json::from_slice(&output).expect("json");
     assert_eq!(response["ok"], false);
     assert_eq!(response["error"]["code"], "invalid-request");
+}
+
+#[test]
+fn historical_continuity_jsonl_method_reports_dirty_history_explicitly() {
+    let root = temp_root();
+    let scan_line = format!(
+        "{}\n",
+        jsonl_request(1, "scan", json!({"projectRoot": root.to_string_lossy()}),)
+    );
+    let mut scan_output = Vec::new();
+    serve_jsonl(Cursor::new(scan_line), &mut scan_output).expect("scan serve");
+    let scan_response: Value = serde_json::from_slice(&scan_output).expect("scan json");
+    let uri = scan_response["result"]["context_refs"][0]["uri"]
+        .as_str()
+        .expect("context uri");
+    let request = jsonl_request(
+        2,
+        "getHistoricalContextContinuity",
+        json!({"projectRoot": root.to_string_lossy(), "uri": uri}),
+    );
+    let mut output = Vec::new();
+    serve_jsonl(Cursor::new(format!("{request}\n")), &mut output).expect("continuity serve");
+    let response: Value = serde_json::from_slice(&output).expect("continuity json");
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["result"]["status"], "unavailable");
+    assert_eq!(
+        response["result"]["reason"],
+        "historical-continuity-unavailable-for-dirty-source"
+    );
+    fs::remove_dir_all(root).expect("cleanup");
 }
 
 #[test]

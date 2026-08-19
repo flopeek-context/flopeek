@@ -165,6 +165,7 @@ fn exact_candidate_uris(
     connection: &Connection,
     reference: &ContextRef,
     current_basis: &GraphBasis,
+    current_project_id: &str,
 ) -> Result<Vec<String>, String> {
     if reference.fingerprint_scope != "ast-and-direct-edges"
         || reference.fingerprint_contract != crate::temporal::NODE_FINGERPRINT_CONTRACT
@@ -201,7 +202,7 @@ fn exact_candidate_uris(
     let rows = statement
         .query_map(
             params![
-                reference.project_id,
+                current_project_id,
                 current_basis.graph_id,
                 current_basis.graph_version as i64,
                 origin_kind,
@@ -223,7 +224,8 @@ fn exact_candidate_uris(
 
 pub fn reconcile_context(root: &Path, uri: &str) -> Result<ContextReconciliation, String> {
     let connection = open(root)?;
-    let project_id = crate::graph::project_id(root);
+    let current_project_id = crate::graph::project_id(root);
+    let project_id = super::query::resolution_project(&connection, uri, &current_project_id)?;
     let reference = match context::resolve(&connection, uri, &project_id) {
         Ok(reference) => reference,
         Err(_) => ContextRef {
@@ -247,7 +249,8 @@ pub fn reconcile_context(root: &Path, uri: &str) -> Result<ContextReconciliation
         },
     };
     let (candidates, truncated) = if let Some(current_basis) = reference.current_basis.as_ref() {
-        let mut candidates = exact_candidate_uris(&connection, &reference, current_basis)?;
+        let mut candidates =
+            exact_candidate_uris(&connection, &reference, current_basis, &current_project_id)?;
         let truncated = candidates.len() > 32;
         candidates.truncate(32);
         (candidates, truncated)

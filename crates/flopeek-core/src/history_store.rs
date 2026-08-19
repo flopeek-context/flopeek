@@ -194,6 +194,11 @@ mod tests {
             schema_version: HISTORICAL_SNAPSHOT_SCHEMA.to_string(),
             project_id: crate::graph::project_id(&root),
             source_revision: "a".repeat(40),
+            evidence_contract: Some(crate::model::EvidenceContract {
+                graph_schema_version: crate::model::GRAPH_SCHEMA.to_string(),
+                graph_derivation_id: crate::graph::GRAPH_DERIVATION_ID.to_string(),
+                node_fingerprint_contract: crate::temporal::NODE_FINGERPRINT_CONTRACT.to_string(),
+            }),
             files: Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
@@ -207,7 +212,7 @@ mod tests {
         };
         let derivation = "typescript-historical-delta-v2";
         let old_parser = "tree-sitter-typescript-0.23.2";
-        save_with_key(&root, &snapshot, derivation, old_parser, 10, 1024)
+        save_with_key(&root, &snapshot, derivation, old_parser, 10, 4096)
             .expect("save old parser namespace");
         assert!(
             load_with_key(
@@ -216,7 +221,7 @@ mod tests {
                 derivation,
                 crate::typescript::PARSER_IDENTITY,
                 10,
-                1024,
+                4096,
             )
             .expect("load exact parser namespace before migration")
             .is_none()
@@ -227,7 +232,7 @@ mod tests {
             derivation,
             crate::typescript::PARSER_IDENTITY,
             10,
-            1024,
+            4096,
         )
         .expect("save exact parser namespace");
         assert!(
@@ -237,7 +242,7 @@ mod tests {
                 derivation,
                 crate::typescript::PARSER_IDENTITY,
                 10,
-                1024,
+                4096,
             )
             .expect("load exact parser namespace")
             .is_some()
@@ -249,7 +254,7 @@ mod tests {
                 crate::graph::GRAPH_DERIVATION_ID,
                 crate::typescript::PARSER_IDENTITY,
                 10,
-                1024,
+                4096,
             )
             .expect("reject prior derivation namespace")
             .is_none()

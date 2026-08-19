@@ -21,7 +21,7 @@ mod architecture_contract_tests {
     #[test]
     fn public_core_contract_paths_remain_stable() {
         assert_eq!(crate::model::GRAPH_SCHEMA, "flopeek-graph/v7");
-        assert_eq!(crate::model::PROTOCOL_SCHEMA, "flopeek-protocol/v10");
+        assert_eq!(crate::model::PROTOCOL_SCHEMA, "flopeek-protocol/v11");
         let _: fn(&std::path::Path) -> Result<crate::model::ScanResult, String> =
             crate::protocol::scan_project;
         let _: fn(&std::path::Path, &str) -> Result<crate::model::ContextRef, String> =
@@ -65,7 +65,7 @@ mod architecture_contract_tests {
         assert_eq!(crate::model::FLOW_REF_SCHEMA, "flopeek-flow-ref/v2");
         assert_eq!(
             crate::model::DIAGNOSTIC_PACKET_SCHEMA,
-            "flopeek-diagnostic-packet/v5"
+            "flopeek-diagnostic-packet/v6"
         );
         assert_eq!(
             crate::model::HISTORICAL_SNAPSHOT_SCHEMA,
@@ -90,6 +90,10 @@ mod architecture_contract_tests {
         assert_eq!(
             crate::model::OBSERVATION_DELTA_SCHEMA,
             "flopeek-observation-delta/v2"
+        );
+        assert_eq!(
+            crate::model::HISTORICAL_CONTEXT_CONTINUITY_SCHEMA,
+            "flopeek-historical-context-continuity/v1"
         );
         assert_eq!(
             crate::temporal::observation_event_id("project", None, "observation"),

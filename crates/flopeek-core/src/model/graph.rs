@@ -18,7 +18,7 @@ pub struct GraphNode {
     pub evidence_fingerprint: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct GraphEdge {
     pub from: String,

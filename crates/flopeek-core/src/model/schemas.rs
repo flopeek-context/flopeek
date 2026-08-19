@@ -7,18 +7,18 @@
 use serde::{Deserialize, Serialize};
 
 pub const PRODUCT_IDENTITY: &str = "flopeek-repository-memory";
-pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v6";
+pub const PRODUCT_CONTRACT_SCHEMA: &str = "flopeek-product-contract/v7";
 pub const GRAPH_SCHEMA: &str = "flopeek-graph/v7";
 pub const CONTEXT_REF_SCHEMA: &str = "flopeek-context-ref/v4";
-pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v10";
+pub const PROTOCOL_SCHEMA: &str = "flopeek-protocol/v11";
 pub const STORE_SCHEMA: &str = "flopeek-sqlite/v7";
 pub const TYPESCRIPT_FACTS_SCHEMA: &str = "flopeek-typescript-facts/v4";
 pub const TYPESCRIPT_RESOLUTION_SCHEMA: &str = "flopeek-typescript-resolution/v3";
 pub const DIAGNOSTIC_CONTEXT_SCHEMA: &str = "flopeek-diagnostic-context/v4";
 pub const DIAGNOSTIC_ASSERTION_SCHEMA: &str = "flopeek-diagnostic-assertion/v2";
-pub const HISTORICAL_CANDIDATE_SCHEMA: &str = "flopeek-historical-candidate/v3";
-pub const HISTORICAL_DIAGNOSIS_SCHEMA: &str = "flopeek-historical-diagnosis/v2";
-pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v5";
+pub const HISTORICAL_CANDIDATE_SCHEMA: &str = "flopeek-historical-candidate/v4";
+pub const HISTORICAL_DIAGNOSIS_SCHEMA: &str = "flopeek-historical-diagnosis/v3";
+pub const DIAGNOSTIC_PACKET_SCHEMA: &str = "flopeek-diagnostic-packet/v6";
 pub const HISTORICAL_SNAPSHOT_SCHEMA: &str = "flopeek-historical-snapshot/v7";
 pub const ENTRY_EVIDENCE_SCHEMA: &str = "flopeek-entry-evidence/v1";
 pub const CONTEXT_FLOW_SCHEMA: &str = "flopeek-context-flow/v1";
@@ -27,6 +27,7 @@ pub const FLOW_REF_SCHEMA: &str = "flopeek-flow-ref/v2";
 pub const OBSERVATION_CONTINUITY_SCHEMA: &str = "flopeek-observation-continuity/v2";
 pub const CONTEXT_RECONCILIATION_SCHEMA: &str = "flopeek-context-reconciliation/v2";
 pub const REPOSITORY_IDENTITY_SCHEMA: &str = "flopeek-repository-identity/v1";
+pub const HISTORICAL_CONTEXT_CONTINUITY_SCHEMA: &str = "flopeek-historical-context-continuity/v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
