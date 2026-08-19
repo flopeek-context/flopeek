@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ContextFlow, ContextReconciliation, ContextRef, EntryEvidence, EntryManifest, EvidenceContract,
-    FlowRef, GraphEdge, GraphNode, ModuleResolutionBasis, ModuleResolutionConfigFile,
-    RelatedTestEvidence, ResolutionEvidence, SourceFile,
+    FlowRef, GraphEdge, GraphNode, LastKnownGoodBinding, ModuleResolutionBasis,
+    ModuleResolutionConfigFile, RelatedTestEvidence, ResolutionEvidence, SourceFile,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +96,8 @@ pub struct DiagnosticContext {
     pub focus_flow_refs: Vec<String>,
     pub current_graph_basis: GraphBasis,
     pub last_known_good_basis: Option<GitBasis>,
+    #[serde(default)]
+    pub last_known_good_binding_id: Option<String>,
     pub constraints: Vec<String>,
     pub acceptance_criteria: Vec<String>,
     pub unresolved_questions: Vec<String>,
@@ -191,6 +193,10 @@ pub struct HistoricalDiagnosis {
     pub context_id: String,
     pub current_graph_basis: GraphBasis,
     pub last_known_good_basis: Option<GitBasis>,
+    #[serde(default)]
+    pub last_known_good_binding: Option<LastKnownGoodBinding>,
+    #[serde(default)]
+    pub last_known_good_status: String,
     pub range: Option<String>,
     pub commits_inspected: usize,
     pub candidates: Vec<HistoricalCandidate>,
@@ -207,6 +213,8 @@ pub struct DiagnosticPacket {
     pub context: DiagnosticContext,
     pub current_graph_basis: GraphBasis,
     pub last_known_good_basis: Option<GitBasis>,
+    #[serde(default)]
+    pub last_known_good_binding: Option<LastKnownGoodBinding>,
     pub focus_context_refs: Vec<ContextRef>,
     #[serde(default)]
     pub focus_flow_refs: Vec<FlowRef>,

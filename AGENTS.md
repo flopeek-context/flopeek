@@ -392,6 +392,14 @@ same-database alias. They are not portable repository refs and are not silently
 rewritten. Identity transitions start a new observation chain with an explicit
 limitation rather than inventing continuity.
 
+Last-known-good is a separate, append-only engineering-memory binding scoped to a
+Diagnostic Context. It must carry repository identity, Git revision, provenance
+and validation evidence. Agents and tools may propose a binding; only a human
+actor may confirm, reject, revoke, or supersede it. Flopeek must not infer
+last-known-good from tests, commit messages, graph similarity, or candidate
+ranking. A legacy `lastKnownGoodBasis` is readable as `legacy-unbound` and is not
+used by new historical diagnosis.
+
 ### 7.4 Diagnostic revision
 
 Engineering understanding has its own lifecycle.

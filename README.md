@@ -137,6 +137,15 @@ and unresolved limitations. Historical snapshots include bounded package
 manifest metadata so entry changes can be reported as candidates without
 claiming causality.
 
+Last-known-good is explicit engineering evidence. The JSONL methods
+`createLastKnownGoodBinding`, `getLastKnownGood`, `listLastKnownGoodHistory`, and
+`validateLastKnownGood` persist an append-only binding per Diagnostic Context.
+Only a human actor may confirm, reject, revoke, or supersede a binding; agents and
+tools may propose one. Legacy `lastKnownGoodBasis` remains readable as
+`legacy-unbound` and is not used for new historical diagnosis. Flopeek never
+infers last-known-good from tests, commit messages, graph similarity, or candidate
+ranking.
+
 Adjacent local observations also expose `getObservationDelta`. The response
 compares only the direct predecessor event and records bounded source-path,
 node, edge, and flow changes when both graph derivation and fingerprint

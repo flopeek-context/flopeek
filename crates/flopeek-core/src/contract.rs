@@ -5,7 +5,7 @@ use serde_json::Value;
 pub fn validate() -> Result<(), String> {
     let value: Value = serde_json::from_str(include_str!("../../../contracts/product.json"))
         .map_err(|error| format!("Invalid product contract JSON: {error}"))?;
-    if value["schemaVersion"] != "flopeek-product-contract/v7"
+    if value["schemaVersion"] != "flopeek-product-contract/v8"
         || value["canonicalRepository"] != "flopeek-context/flopeek"
         || value["coreImplementation"] != "rust"
         || value["persistedAuthority"] != "sqlite"
@@ -28,6 +28,7 @@ pub fn validate() -> Result<(), String> {
         || value["legacyProjectIdentity"] != "local-alias-only"
         || value["crossCheckoutContext"] != "repository-identity-required"
         || value["historicalContextContinuity"] != "adjacent-first-parent-static-evidence"
+        || value["lastKnownGood"] != "attributed-human-confirmation"
         || value["productIdentity"] != "versioned-repository-context"
         || value["graphRole"] != "deterministic-substrate"
         || value["languageCountIsProductGoal"] != false

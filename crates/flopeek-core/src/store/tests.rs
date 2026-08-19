@@ -2,7 +2,7 @@
 
 use super::migrations::{
     migration_v1, migration_v2, migration_v3, migration_v4, migration_v5, migration_v6,
-    migration_v7,
+    migration_v7, migration_v8, migration_v9,
 };
 use super::*;
 use crate::graph;
@@ -131,6 +131,30 @@ fn initialize_v7_database(root: &Path) {
     transaction.commit().expect("v7 migration commit");
 }
 
+fn initialize_v9_database(root: &Path) {
+    initialize_v7_database(root);
+    let mut connection = rusqlite::Connection::open(database_path(root)).expect("sqlite v9");
+    for (target, migration) in [
+        (
+            8_i64,
+            migration_v8 as fn(&Transaction<'_>) -> Result<(), String>,
+        ),
+        (
+            9_i64,
+            migration_v9 as fn(&Transaction<'_>) -> Result<(), String>,
+        ),
+    ] {
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("migration transaction");
+        migration(&transaction).expect("migration");
+        transaction
+            .execute_batch(&format!("PRAGMA user_version = {target};"))
+            .expect("version");
+        transaction.commit().expect("migration commit");
+    }
+}
+
 fn git(root: &Path, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")
@@ -147,6 +171,7 @@ fn git(root: &Path, args: &[&str]) {
 
 mod flow;
 mod graph_behavior;
+mod last_known_good;
 mod legacy;
 mod migration;
 mod temporal;
