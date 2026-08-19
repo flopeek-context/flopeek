@@ -393,16 +393,27 @@ rewritten. Identity transitions start a new observation chain with an explicit
 limitation rather than inventing continuity.
 
 Last-known-good is a separate, append-only engineering-memory binding scoped to a
-Diagnostic Context. It must carry repository identity, Git revision, provenance
-and validation evidence. Its effective state must be reduced from the complete
-predecessor-linked lifecycle; a confirmed event that is later rejected, revoked,
-or superseded is not an active last-known-good. Historical diagnosis may use only
-an active confirmed binding whose revision is on the current HEAD first-parent
-lineage. Revision existence or general Git reachability alone is insufficient.
+Diagnostic Context. Version 2 is a targeted state machine: `predecessorBindingId`
+is only append order; `targetBindingId` identifies the pending proposal or active
+binding acted upon; and `supersedesBindingId` is accepted only on a replacement
+confirmation. There may be only one pending proposal. Rejection preserves the
+active confirmed binding, revocation clears it, and replacement confirmation must
+target both the pending proposal and the active binding it replaces. The legacy
+`superseded` event remains read-only history and is not accepted for new writes.
+The Context pointer is reduced from the complete predecessor-linked lifecycle and
+always points to the active confirmed binding or `null`.
+
+Bindings must carry repository identity, Git revision, provenance and validation
+evidence. If a graph basis is supplied, project, revision, graph, graph version,
+observation, and optional event must agree; otherwise validation is invalid with
+`last-known-good-basis-provenance-mismatch`. Historical diagnosis may use only an
+active confirmed binding whose revision is on the current HEAD first-parent
+lineage and whose basis is provenance-consistent. Revision existence or general
+Git reachability alone is insufficient.
 
 Agents and tools may propose a binding. A caller may declare `actorKind = human`
-to confirm, reject, revoke, or supersede it, but this is attributed actor metadata,
-not authenticated human identity. Before Flopeek exposes an untrusted remote agent
+to confirm, reject, or revoke it, but this is attributed actor metadata, not
+authenticated human identity. Before Flopeek exposes an untrusted remote agent
 surface, human-only transitions require a separate trusted action boundary.
 Flopeek must not infer last-known-good from tests, commit messages, graph
 similarity, or candidate ranking. A legacy `lastKnownGoodBasis` is readable as
@@ -1048,7 +1059,10 @@ Required concepts include:
   "languageCountIsProductGoal": false,
   "reviewGraphIsPrimaryProduct": false,
   "contextReconciliation": "exact-compatible-fingerprint-candidates",
-  "automaticSupersession": "disabled-without-lineage-proof"
+  "automaticSupersession": "disabled-without-lineage-proof",
+  "lastKnownGoodLifecycle": "targeted-append-only-state-machine",
+  "lastKnownGoodProvenance": "revision-observation-graph-consistent",
+  "humanActorIdentity": "caller-attributed-not-authenticated"
 }
 ```
 
@@ -1130,7 +1144,7 @@ Goal:
 
 Status:
 
-**implemented; maturity gate passed**
+**implemented; correctness frozen**
 
 Strengthen:
 

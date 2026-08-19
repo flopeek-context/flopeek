@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "flopeek-product-contract/v8",
+  "schemaVersion": "flopeek-product-contract/v9",
   "canonicalRepository": "flopeek-context/flopeek",
   "coreImplementation": "rust",
   "persistedAuthority": "sqlite",
@@ -24,6 +24,9 @@
   "crossCheckoutContext": "repository-identity-required",
   "historicalContextContinuity": "adjacent-first-parent-static-evidence",
   "lastKnownGood": "attributed-human-confirmation",
+  "lastKnownGoodLifecycle": "targeted-append-only-state-machine",
+  "lastKnownGoodProvenance": "revision-observation-graph-consistent",
+  "humanActorIdentity": "caller-attributed-not-authenticated",
   "productIdentity": "versioned-repository-context",
   "graphRole": "deterministic-substrate",
   "languageCountIsProductGoal": false,
