@@ -196,6 +196,42 @@ fn historical_context_continuity_compares_adjacent_first_parent_without_superses
 }
 
 #[test]
+fn historical_context_continuity_rejects_non_adjacent_explicit_range() {
+    let root = fixture_root();
+    fs::write(root.join("src/main.ts"), "export const main = 1;\n").expect("main A");
+    let first = commit(&root, "A: baseline");
+    fs::write(root.join("src/main.ts"), "export const main = 2;\n").expect("main B");
+    let _second = commit(&root, "B: intermediate");
+    fs::write(root.join("src/main.ts"), "export const main = 3;\n").expect("main C");
+    let third = commit(&root, "C: current");
+    let (snapshot, facts) = graph::build(&root).expect("build C");
+    let result = store::persist_scan(&root, snapshot, &facts).expect("persist C");
+    let reference = result.context_refs.first().expect("context ref");
+
+    let continuity = get_historical_context_continuity(
+        &root,
+        &reference.uri,
+        Some(&first),
+        Some(&third),
+        HistoricalContinuityLimits {
+            max_paths: 256,
+            max_nodes: 512,
+            max_edges: 1_024,
+            max_flows: 128,
+        },
+    )
+    .expect("non-adjacent response");
+
+    assert_eq!(continuity.status, "unavailable");
+    assert_eq!(continuity.reason, "non-adjacent-first-parent-range");
+    assert_eq!(continuity.from_revision.as_deref(), Some(first.as_str()));
+    assert_eq!(continuity.to_revision.as_deref(), Some(third.as_str()));
+    assert!(continuity.node_changes.is_empty());
+    assert!(continuity.edge_changes.is_empty());
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
 fn historical_continuity_reports_path_fingerprint_lineage_without_successor() {
     let root = fixture_root();
     fs::write(root.join("src/old.ts"), "export const value = 1;\n").expect("old source");

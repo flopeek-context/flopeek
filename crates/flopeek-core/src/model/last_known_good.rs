@@ -2,6 +2,7 @@
 
 use super::{EvidenceReference, GitBasis, GraphBasis, LAST_KNOWN_GOOD_SCHEMA};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
@@ -68,4 +69,95 @@ impl LastKnownGoodBinding {
     pub fn new_schema_version() -> String {
         LAST_KNOWN_GOOD_SCHEMA.to_string()
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LastKnownGoodLifecycle {
+    pub history: Vec<LastKnownGoodBinding>,
+    pub latest_event: Option<LastKnownGoodBinding>,
+    pub active_confirmed: Option<LastKnownGoodBinding>,
+}
+
+pub(crate) fn reduce_last_known_good_lifecycle(
+    bindings: Vec<LastKnownGoodBinding>,
+) -> Result<LastKnownGoodLifecycle, String> {
+    if bindings.is_empty() {
+        return Ok(LastKnownGoodLifecycle::default());
+    }
+    let binding_count = bindings.len();
+    let by_id = bindings
+        .into_iter()
+        .map(|binding| (binding.binding_id.clone(), binding))
+        .collect::<BTreeMap<_, _>>();
+    if by_id.len() != binding_count {
+        return Err("Last-known-good lifecycle contains duplicate identities.".to_string());
+    }
+    let expected_context = by_id
+        .values()
+        .next()
+        .map(|binding| (binding.project_id.as_str(), binding.context_id.as_str()))
+        .expect("non-empty lifecycle");
+    if by_id.values().any(|binding| {
+        binding.project_id != expected_context.0 || binding.context_id != expected_context.1
+    }) {
+        return Err("Last-known-good lifecycle metadata is inconsistent.".to_string());
+    }
+    let mut successors = BTreeMap::<String, String>::new();
+    let mut roots = BTreeSet::new();
+    for binding in by_id.values() {
+        match binding.predecessor_binding_id.as_deref() {
+            Some(predecessor) => {
+                if predecessor == binding.binding_id || !by_id.contains_key(predecessor) {
+                    return Err("Last-known-good lifecycle predecessor is corrupted.".to_string());
+                }
+                if successors
+                    .insert(predecessor.to_string(), binding.binding_id.clone())
+                    .is_some()
+                {
+                    return Err("Last-known-good lifecycle is branched.".to_string());
+                }
+            }
+            None => {
+                roots.insert(binding.binding_id.clone());
+            }
+        }
+    }
+    if roots.len() != 1 {
+        return Err("Last-known-good lifecycle must have exactly one root.".to_string());
+    }
+    let mut history = Vec::with_capacity(by_id.len());
+    let mut current = roots.into_iter().next().expect("one lifecycle root");
+    loop {
+        let binding = by_id
+            .get(&current)
+            .cloned()
+            .ok_or_else(|| "Last-known-good lifecycle is corrupted.".to_string())?;
+        history.push(binding);
+        let Some(next) = successors.get(&current) else {
+            break;
+        };
+        current = next.clone();
+        if history.len() > by_id.len() {
+            return Err("Last-known-good lifecycle contains a cycle.".to_string());
+        }
+    }
+    if history.len() != by_id.len() {
+        return Err("Last-known-good lifecycle is disconnected.".to_string());
+    }
+    let mut active_confirmed = None;
+    for binding in &history {
+        match binding.status.as_str() {
+            "confirmed" => active_confirmed = Some(binding.clone()),
+            "rejected" | "revoked" | "superseded" => active_confirmed = None,
+            "proposed" => {}
+            _ => {
+                return Err("Last-known-good lifecycle status is corrupted.".to_string());
+            }
+        }
+    }
+    Ok(LastKnownGoodLifecycle {
+        latest_event: history.last().cloned(),
+        history,
+        active_confirmed,
+    })
 }

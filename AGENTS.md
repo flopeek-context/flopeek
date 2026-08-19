@@ -394,11 +394,19 @@ limitation rather than inventing continuity.
 
 Last-known-good is a separate, append-only engineering-memory binding scoped to a
 Diagnostic Context. It must carry repository identity, Git revision, provenance
-and validation evidence. Agents and tools may propose a binding; only a human
-actor may confirm, reject, revoke, or supersede it. Flopeek must not infer
-last-known-good from tests, commit messages, graph similarity, or candidate
-ranking. A legacy `lastKnownGoodBasis` is readable as `legacy-unbound` and is not
-used by new historical diagnosis.
+and validation evidence. Its effective state must be reduced from the complete
+predecessor-linked lifecycle; a confirmed event that is later rejected, revoked,
+or superseded is not an active last-known-good. Historical diagnosis may use only
+an active confirmed binding whose revision is on the current HEAD first-parent
+lineage. Revision existence or general Git reachability alone is insufficient.
+
+Agents and tools may propose a binding. A caller may declare `actorKind = human`
+to confirm, reject, revoke, or supersede it, but this is attributed actor metadata,
+not authenticated human identity. Before Flopeek exposes an untrusted remote agent
+surface, human-only transitions require a separate trusted action boundary.
+Flopeek must not infer last-known-good from tests, commit messages, graph
+similarity, or candidate ranking. A legacy `lastKnownGoodBasis` is readable as
+`legacy-unbound` and is not used by new historical diagnosis.
 
 ### 7.4 Diagnostic revision
 
@@ -727,6 +735,10 @@ requires-diagnosis
 Historical diagnosis should use deterministic first-parent semantics for normal lineage analysis.
 
 Merge commits must be compared against their explicit first parent.
+
+An adjacent historical-continuity comparison must verify that its explicit
+`fromRevision` is exactly the first parent of `toRevision`. A non-adjacent pair
+must be `unavailable` with an explicit reason; it must never be labeled adjacent.
 
 Rename/copy records must preserve relevant old/new paths.
 
@@ -1118,7 +1130,7 @@ Goal:
 
 Status:
 
-**active**
+**implemented; maturity gate passed**
 
 Strengthen:
 
@@ -1131,6 +1143,10 @@ Strengthen:
 - last-known-good workflows.
 
 ### P3 — Engineering Memory
+
+Status:
+
+**active**
 
 Strengthen:
 

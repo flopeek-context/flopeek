@@ -1,7 +1,41 @@
 //! Pure evidence comparison helpers for adjacent historical snapshots.
 
-use crate::model::{HistoricalPathChange, HistoricalSnapshot, ObservationBasisRelations};
+use crate::model::{
+    ContextRef, GraphBasis, HistoricalPathChange, HistoricalSnapshot, ObservationBasisRelations,
+};
 use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) fn graph_basis_from_reference(reference: &ContextRef) -> GraphBasis {
+    reference
+        .origin_basis
+        .clone()
+        .unwrap_or_else(|| GraphBasis {
+            project_id: reference.project_id.clone(),
+            graph_id: reference.graph_id.clone(),
+            graph_version: reference.graph_version,
+            source_revision: reference.origin_source_revision.clone(),
+            observation_id: reference.origin_observation_id.clone(),
+        })
+}
+
+pub(super) fn snapshot_basis(snapshot: &HistoricalSnapshot) -> GraphBasis {
+    let bytes = serde_json::to_vec(&(
+        &snapshot.project_id,
+        &snapshot.source_revision,
+        &snapshot.files,
+        &snapshot.nodes,
+        &snapshot.edges,
+        &snapshot.flows,
+    ))
+    .unwrap_or_default();
+    GraphBasis {
+        project_id: snapshot.project_id.clone(),
+        graph_id: blake3::hash(&bytes).to_hex().to_string(),
+        graph_version: 0,
+        source_revision: snapshot.source_revision.clone(),
+        observation_id: String::new(),
+    }
+}
 
 pub(super) fn snapshot_basis_relations(
     before: &HistoricalSnapshot,

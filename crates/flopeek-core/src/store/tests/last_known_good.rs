@@ -5,7 +5,7 @@ use crate::model::{
 use std::fs;
 use std::path::Path;
 
-fn git(root: &Path, args: &[&str]) {
+fn git(root: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
@@ -13,6 +13,7 @@ fn git(root: &Path, args: &[&str]) {
         .output()
         .expect("git");
     assert!(output.status.success(), "git {args:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 #[test]
@@ -120,6 +121,177 @@ fn last_known_good_is_append_only_and_human_confirmation_is_required() {
             .status,
         "valid"
     );
+    let mut revoked = binding("revoked", "human", "human", "revoked");
+    revoked.predecessor_binding_id = Some(confirmed.binding_id.clone());
+    create_last_known_good_binding(&root, revoked).expect("revoked");
+    let resolution = get_last_known_good(&root, &context.id).expect("revoked resolution");
+    assert_eq!(resolution.status, "revoked");
+    assert_eq!(
+        resolution
+            .binding
+            .as_ref()
+            .map(|value| value.binding_id.as_str()),
+        Some("revoked")
+    );
+    assert!(
+        confirmed_last_known_good(&root, &context.id)
+            .expect("effective confirmed")
+            .is_none()
+    );
+    assert!(
+        get_diagnostic_context(&root, &context.id)
+            .expect("context after revocation")
+            .last_known_good_binding_id
+            .is_none()
+    );
+    let diagnosis = crate::diagnostic::diagnose_history(
+        &root,
+        &context.id,
+        crate::model::DiagnosticLimits::default(),
+    )
+    .expect("diagnosis after revocation");
+    assert!(diagnosis.last_known_good_binding.is_none());
+    assert!(diagnosis.candidates.is_empty());
+
+    let mut reconfirmed = binding("reconfirmed", "human", "human", "confirmed");
+    reconfirmed.predecessor_binding_id = Some("revoked".to_string());
+    let reconfirmed =
+        create_last_known_good_binding(&root, reconfirmed).expect("reconfirmed binding");
+    let mut superseded = binding("superseded", "human", "human", "superseded");
+    superseded.predecessor_binding_id = Some(reconfirmed.binding_id.clone());
+    superseded.superseded_binding_id = Some(reconfirmed.binding_id);
+    create_last_known_good_binding(&root, superseded).expect("superseded");
+    assert_eq!(
+        get_last_known_good(&root, &context.id)
+            .expect("superseded resolution")
+            .status,
+        "superseded"
+    );
+    assert!(
+        confirmed_last_known_good(&root, &context.id)
+            .expect("superseded effective confirmed")
+            .is_none()
+    );
+    assert!(
+        get_diagnostic_context(&root, &context.id)
+            .expect("context after supersession")
+            .last_known_good_binding_id
+            .is_none()
+    );
+    assert_eq!(
+        list_last_known_good_history(&root, &context.id)
+            .expect("ordered history")
+            .iter()
+            .map(|value| value.binding_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "proposed",
+            "confirmed",
+            "revoked",
+            "reconfirmed",
+            "superseded"
+        ]
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn last_known_good_requires_current_first_parent_lineage() {
+    let root = fixture_root();
+    fs::write(
+        root.join(crate::identity::MANIFEST_PATH),
+        r#"{"schemaVersion":"flopeek-repository-identity/v1","repositoryId":"repo_123e4567-e89b-12d3-a456-426614174000"}"#,
+    )
+    .expect("manifest");
+    git(&root, &["init"]);
+    git(
+        &root,
+        &["config", "user.email", "flopeek-test@example.invalid"],
+    );
+    git(&root, &["config", "user.name", "Flopeek Test"]);
+    fs::write(root.join("main.ts"), "export const main = 1;\n").expect("baseline");
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "baseline"]);
+    let main_branch = git(&root, &["branch", "--show-current"]);
+    git(&root, &["switch", "-c", "side"]);
+    fs::write(root.join("side.ts"), "export const side = 1;\n").expect("side source");
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "side"]);
+    let side_revision = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["switch", &main_branch]);
+    fs::write(root.join("main.ts"), "export const main = 2;\n").expect("main current");
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "main current"]);
+
+    let (snapshot, facts) = graph::build(&root).expect("build");
+    let scan = persist_scan(&root, snapshot, &facts).expect("scan");
+    let context = create_diagnostic_context(
+        &root,
+        DiagnosticContext {
+            schema_version: DIAGNOSTIC_CONTEXT_SCHEMA.to_string(),
+            id: "side-lineage-context".to_string(),
+            project_id: scan.project_id.clone(),
+            revision: 0,
+            intent: "diagnose".to_string(),
+            symptom: "side lineage".to_string(),
+            expected_behavior: "first-parent only".to_string(),
+            focus_context_refs: vec![scan.context_refs[0].uri.clone()],
+            focus_flow_refs: Vec::new(),
+            current_graph_basis: crate::diagnostic::graph_basis(&scan.graph),
+            last_known_good_basis: None,
+            last_known_good_binding_id: None,
+            constraints: vec![],
+            acceptance_criteria: vec![],
+            unresolved_questions: vec![],
+            actor: "agent".to_string(),
+            created_at: 0,
+            status: "open".to_string(),
+            supersedes: None,
+        },
+    )
+    .expect("context");
+    let repository_id = crate::identity::resolve(&root)
+        .expect("identity")
+        .repository_id
+        .expect("repository id");
+    let binding = LastKnownGoodBinding {
+        schema_version: LAST_KNOWN_GOOD_SCHEMA.to_string(),
+        binding_id: "side-proposal".to_string(),
+        repository_id,
+        project_id: scan.project_id,
+        context_id: context.id.clone(),
+        git_revision: side_revision,
+        observation_id: None,
+        event_id: None,
+        graph_basis: None,
+        actor: "agent".to_string(),
+        actor_kind: "agent".to_string(),
+        evidence: Vec::new(),
+        status: "proposed".to_string(),
+        predecessor_binding_id: None,
+        superseded_binding_id: None,
+        created_at: 0,
+        validation: Default::default(),
+    };
+    let proposed = create_last_known_good_binding(&root, binding).expect("side proposal");
+    assert!(proposed.validation.revision_available);
+    assert!(!proposed.validation.first_parent_range_available);
+    assert_eq!(proposed.validation.status, "invalid");
+    assert!(
+        proposed
+            .validation
+            .limitations
+            .iter()
+            .any(|value| value == "git-revision-not-on-current-first-parent-lineage")
+    );
+    let mut confirmation = proposed;
+    confirmation.binding_id = "side-confirmation".to_string();
+    confirmation.actor = "human".to_string();
+    confirmation.actor_kind = "human".to_string();
+    confirmation.status = "confirmed".to_string();
+    confirmation.predecessor_binding_id = Some("side-proposal".to_string());
+    confirmation.validation = Default::default();
+    assert!(create_last_known_good_binding(&root, confirmation).is_err());
     fs::remove_dir_all(root).expect("cleanup");
 }
 
