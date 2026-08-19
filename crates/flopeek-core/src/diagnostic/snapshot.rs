@@ -170,6 +170,11 @@ pub(super) fn build_historical_snapshot(
         schema_version: HISTORICAL_SNAPSHOT_SCHEMA.to_string(),
         project_id: graph_snapshot.project_id,
         source_revision: revision.to_string(),
+        evidence_contract: Some(crate::model::EvidenceContract {
+            graph_schema_version: crate::model::GRAPH_SCHEMA.to_string(),
+            graph_derivation_id: crate::graph::GRAPH_DERIVATION_ID.to_string(),
+            node_fingerprint_contract: crate::temporal::NODE_FINGERPRINT_CONTRACT.to_string(),
+        }),
         files: graph_snapshot.files,
         nodes: graph_snapshot.nodes,
         edges: graph_snapshot.edges,

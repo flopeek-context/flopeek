@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ContextFlow, ContextReconciliation, ContextRef, EntryEvidence, EntryManifest, FlowRef,
-    GraphEdge, GraphNode, ModuleResolutionBasis, ModuleResolutionConfigFile, RelatedTestEvidence,
-    ResolutionEvidence, SourceFile,
+    ContextFlow, ContextReconciliation, ContextRef, EntryEvidence, EntryManifest, EvidenceContract,
+    FlowRef, GraphEdge, GraphNode, ModuleResolutionBasis, ModuleResolutionConfigFile,
+    RelatedTestEvidence, ResolutionEvidence, SourceFile,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -158,6 +158,8 @@ pub struct HistoricalSnapshot {
     pub schema_version: String,
     pub project_id: String,
     pub source_revision: String,
+    #[serde(default)]
+    pub evidence_contract: Option<EvidenceContract>,
     pub files: Vec<SourceFile>,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,

@@ -147,6 +147,14 @@ manifest, truncation, and omissions without source bodies, runtime order, rename
 claims, or root-cause claims. Observation events
 remain local `observed-after` evidence rather than Git ancestry.
 
+`getHistoricalContextContinuity` compares one Context Ref across two adjacent
+Git snapshots. The default target is `HEAD` and the default source is its first
+parent. It reports bounded path, focused-node, direct-edge, and focused-flow
+changes plus exact-fingerprint lineage candidates. Rename/copy evidence is
+candidate evidence only; it never creates a successor URI or automatic
+supersession. Dirty state, incompatible snapshots, missing parents, and
+repository mismatches remain explicitly unavailable.
+
 ## Scope and provenance
 
 The TypeScript/TSX pilot is intentionally narrow. Historical Flopeek Core source

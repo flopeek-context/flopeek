@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "flopeek-product-contract/v6",
+  "schemaVersion": "flopeek-product-contract/v7",
   "canonicalRepository": "flopeek-context/flopeek",
   "coreImplementation": "rust",
   "persistedAuthority": "sqlite",
@@ -22,6 +22,7 @@
   "checkoutIdentity": "canonical-path-local-only",
   "legacyProjectIdentity": "local-alias-only",
   "crossCheckoutContext": "repository-identity-required",
+  "historicalContextContinuity": "adjacent-first-parent-static-evidence",
   "productIdentity": "versioned-repository-context",
   "graphRole": "deterministic-substrate",
   "languageCountIsProductGoal": false,
