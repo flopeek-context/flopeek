@@ -28,10 +28,12 @@ pub fn persist_scan(
         )
         .optional()
         .map_err(|error| format!("Unable to read previous project identity: {error}"))?;
-    if let Some(previous_project) = previous_project
-        .filter(|previous| previous != &snapshot.project_id)
+    let legacy_project = previous_project
+        .as_ref()
+        .filter(|previous| previous.as_str() != snapshot.project_id.as_str())
         .filter(|_| identity.repository_id.is_some())
-    {
+        .cloned();
+    if let Some(previous_project) = legacy_project.as_deref() {
         transaction
             .execute(
                 "INSERT OR IGNORE INTO project_identity_aliases(
@@ -57,9 +59,17 @@ pub fn persist_scan(
                 "INSERT OR IGNORE INTO repository_identities(
                     repository_id, manifest_path, manifest_bytes, manifest_hash, created_at
                  ) VALUES(?1, ?2, ?3, ?4, ?5)",
-                params![repository_id, manifest_path, manifest_bytes as i64, manifest_hash, now_seconds()],
+                params![
+                    repository_id,
+                    manifest_path,
+                    manifest_bytes as i64,
+                    manifest_hash,
+                    now_seconds()
+                ],
             )
-            .map_err(|error| format!("Unable to persist repository identity provenance: {error}"))?;
+            .map_err(|error| {
+                format!("Unable to persist repository identity provenance: {error}")
+            })?;
     }
     transaction
         .execute(
@@ -239,7 +249,10 @@ pub fn persist_scan(
                 snapshot.identity_basis.status,
                 snapshot.identity_basis.repository_id,
                 snapshot.identity_basis.manifest_path,
-                snapshot.identity_basis.manifest_bytes.map(|value| value as i64),
+                snapshot
+                    .identity_basis
+                    .manifest_bytes
+                    .map(|value| value as i64),
                 snapshot.identity_basis.manifest_hash,
                 identity.checkout_id
             ],
@@ -299,6 +312,18 @@ pub fn persist_scan(
             params![snapshot.project_id, snapshot.observation_id, event_id],
         )
         .map_err(|error| format!("Unable to update current project observation: {error}"))?;
+    if let Some(legacy_project) = legacy_project {
+        transaction
+            .execute(
+                "UPDATE project_state
+                 SET current_observation_id = ?1, current_event_id = ?2
+                 WHERE project_id = ?3",
+                params![snapshot.observation_id, event_id, legacy_project],
+            )
+            .map_err(|error| {
+                format!("Unable to bridge legacy checkout-local project state: {error}")
+            })?;
+    }
     let refs = context::for_snapshot(&transaction, &snapshot)?;
     let mut flow_refs = flow_ref::for_snapshot(&transaction, &snapshot)?;
     let flow_refs_truncated = flow_refs.len() > crate::flow::MAX_FLOW_REFS;

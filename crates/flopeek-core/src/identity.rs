@@ -3,8 +3,10 @@
 //! Repository identity is explicit and portable.  Checkout identity remains a
 //! local compatibility fallback and is never serialized as portable evidence.
 
+use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -43,11 +45,17 @@ pub struct ResolvedIdentity {
 }
 
 pub fn resolve(root: &Path) -> Result<ResolvedIdentity, String> {
-    let root = root
-        .canonicalize()
-        .map_err(|error| format!("Unable to resolve identity root {}: {error}", root.display()))?;
+    let root = root.canonicalize().map_err(|error| {
+        format!(
+            "Unable to resolve identity root {}: {error}",
+            root.display()
+        )
+    })?;
     if !root.is_dir() {
-        return Err(format!("Identity root is not a directory: {}", root.display()));
+        return Err(format!(
+            "Identity root is not a directory: {}",
+            root.display()
+        ));
     }
     let checkout_id = checkout_id(&root);
     let manifest_path = root.join(MANIFEST_PATH);
@@ -80,7 +88,9 @@ pub fn resolve(root: &Path) -> Result<ResolvedIdentity, String> {
         format!("repository-identity-manifest-invalid: unable to resolve path: {error}")
     })?;
     if canonical_manifest.parent() != Some(root.as_path()) {
-        return Err("repository-identity-manifest-invalid: path escapes repository root".to_string());
+        return Err(
+            "repository-identity-manifest-invalid: path escapes repository root".to_string(),
+        );
     }
     let bytes = fs::read(&manifest_path)
         .map_err(|error| format!("Unable to read repository identity manifest: {error}"))?;
@@ -110,18 +120,22 @@ pub fn resolve(root: &Path) -> Result<ResolvedIdentity, String> {
 }
 
 fn parse_manifest(bytes: &[u8]) -> Result<IdentityManifest, String> {
-    let value: serde_json::Value = serde_json::from_slice(bytes)
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let object = deserializer
+        .deserialize_map(StrictObjectVisitor)
         .map_err(|error| format!("repository-identity-manifest-invalid: {error}"))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| "repository-identity-manifest-invalid: root must be an object".to_string())?;
+    deserializer
+        .end()
+        .map_err(|error| format!("repository-identity-manifest-invalid: {error}"))?;
+    let value = serde_json::Value::Object(object);
+    let object = value.as_object().ok_or_else(|| {
+        "repository-identity-manifest-invalid: root must be an object".to_string()
+    })?;
     let expected = ["schemaVersion", "repositoryId"];
     let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
     let expected_set = expected.into_iter().collect::<BTreeSet<_>>();
     if actual != expected_set {
-        return Err(
-            "repository-identity-manifest-invalid: unknown or missing fields".to_string(),
-        );
+        return Err("repository-identity-manifest-invalid: unknown or missing fields".to_string());
     }
     let manifest: IdentityManifest = serde_json::from_value(value)
         .map_err(|error| format!("repository-identity-manifest-invalid: {error}"))?;
@@ -137,6 +151,31 @@ fn parse_manifest(bytes: &[u8]) -> Result<IdentityManifest, String> {
         );
     }
     Ok(manifest)
+}
+
+struct StrictObjectVisitor;
+
+impl<'de> Visitor<'de> for StrictObjectVisitor {
+    type Value = serde_json::Map<String, serde_json::Value>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON object with unique fields")
+    }
+
+    fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut object = serde_json::Map::new();
+        let mut seen = BTreeSet::new();
+        while let Some(key) = access.next_key::<String>()? {
+            if !seen.insert(key.clone()) {
+                return Err(de::Error::custom(format!("duplicate field {key}")));
+            }
+            object.insert(key, access.next_value()?);
+        }
+        Ok(object)
+    }
 }
 
 fn valid_repository_id(value: &str) -> bool {
@@ -170,15 +209,14 @@ pub fn checkout_id(root: &Path) -> String {
 pub fn repository_project_id(repository_id: &str) -> String {
     format!(
         "project_{}",
-        blake3::hash(format!("flopeek-project-repository-v1\0{repository_id}").as_bytes())
-            .to_hex()
+        blake3::hash(format!("flopeek-project-repository-v1\0{repository_id}").as_bytes()).to_hex()
     )
 }
 
 pub fn manifest_path_is_safe(root: &Path) -> bool {
-    root.join(MANIFEST_PATH).components().all(|component| {
-        !matches!(component, Component::Prefix(_) | Component::ParentDir)
-    })
+    root.join(MANIFEST_PATH)
+        .components()
+        .all(|component| !matches!(component, Component::Prefix(_) | Component::ParentDir))
 }
 
 pub fn manifest_path(root: &Path) -> PathBuf {
@@ -204,9 +242,7 @@ mod tests {
     fn write_manifest(root: &Path, id: &str) {
         fs::write(
             root.join(MANIFEST_PATH),
-            format!(
-                "{{\"schemaVersion\":\"{MANIFEST_SCHEMA}\",\"repositoryId\":\"{id}\"}}"
-            ),
+            format!("{{\"schemaVersion\":\"{MANIFEST_SCHEMA}\",\"repositoryId\":\"{id}\"}}"),
         )
         .expect("manifest");
     }
@@ -231,17 +267,37 @@ mod tests {
         let root = temp_root("missing");
         let identity = resolve(&root).expect("identity");
         assert_eq!(identity.basis.status, "unavailable");
-        assert!(identity.basis.limitations.iter().any(|item| item == "cross-checkout-context-unavailable"));
+        assert!(
+            identity
+                .basis
+                .limitations
+                .iter()
+                .any(|item| item == "cross-checkout-context-unavailable")
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
     fn invalid_manifest_is_rejected() {
         let root = temp_root("invalid");
-        fs::write(root.join(MANIFEST_PATH), "{\"repositoryId\":\"bad\"}")
-            .expect("manifest");
+        fs::write(root.join(MANIFEST_PATH), "{\"repositoryId\":\"bad\"}").expect("manifest");
         let error = resolve(&root).expect_err("invalid identity");
         assert!(error.contains("repository-identity-manifest-invalid"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn duplicate_manifest_fields_are_rejected() {
+        let root = temp_root("duplicate");
+        fs::write(
+            root.join(MANIFEST_PATH),
+            format!(
+                "{{\"schemaVersion\":\"{MANIFEST_SCHEMA}\",\"schemaVersion\":\"{MANIFEST_SCHEMA}\",\"repositoryId\":\"repo_123e4567-e89b-12d3-a456-426614174000\"}}"
+            ),
+        )
+        .expect("manifest");
+        let error = resolve(&root).expect_err("duplicate identity");
+        assert!(error.contains("duplicate field"));
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

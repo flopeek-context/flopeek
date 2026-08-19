@@ -54,6 +54,39 @@ fn repository_manifest_is_persisted_without_checkout_path() {
 }
 
 #[test]
+fn legacy_checkout_local_context_ref_is_resolved_through_local_identity_alias() {
+    let root = fixture_root();
+    let (snapshot, facts) = graph::build(&root).expect("build legacy checkout");
+    let legacy = persist_scan(&root, snapshot, &facts).expect("persist legacy checkout");
+    let legacy_ref = legacy.context_refs[0].uri.clone();
+    let legacy_project = legacy.project_id.clone();
+    fs::write(
+        root.join(crate::identity::MANIFEST_PATH),
+        r#"{"schemaVersion":"flopeek-repository-identity/v1","repositoryId":"repo_123e4567-e89b-12d3-a456-426614174000"}"#,
+    )
+    .expect("identity manifest");
+    let (snapshot, facts) = graph::build(&root).expect("build repository identity");
+    let current = persist_scan(&root, snapshot, &facts).expect("persist repository identity");
+    assert_ne!(legacy_project, current.project_id);
+    let resolved = resolve_context(&root, &legacy_ref).expect("resolve legacy ref locally");
+    assert_eq!(resolved.status, "current");
+    assert_eq!(resolved.project_id, legacy_project);
+    let connection = open(&root).expect("open");
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT repository_project_id FROM project_identity_aliases WHERE legacy_project_id = ?1",
+                params![legacy_project],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("identity alias"),
+        current.project_id
+    );
+    drop(connection);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
 fn context_ref_becomes_stale_after_graph_changes() {
     let root = fixture_root();
     let (snapshot, facts) = graph::build(&root).expect("build");

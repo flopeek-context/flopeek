@@ -104,12 +104,59 @@ pub fn status(root: &Path) -> Result<StoreStatus, String> {
 
 pub fn resolve_context(root: &Path, uri: &str) -> Result<ContextRef, String> {
     let connection = open(root)?;
-    context::resolve(&connection, uri, &crate::graph::project_id(root))
+    let current_project = crate::graph::project_id(root);
+    let resolution_project = resolution_project(&connection, uri, &current_project)?;
+    context::resolve(&connection, uri, &resolution_project)
 }
 
 pub fn resolve_flow(root: &Path, uri: &str) -> Result<crate::model::FlowRef, String> {
     let connection = open(root)?;
-    flow_ref::resolve(&connection, uri, &crate::graph::project_id(root))
+    let current_project = crate::graph::project_id(root);
+    let resolution_project = resolution_project(&connection, uri, &current_project)?;
+    flow_ref::resolve(&connection, uri, &resolution_project)
+}
+
+/// Resolve a persisted reference against its original checkout-local project only when
+/// the v9 identity alias explicitly binds that project to the current repository identity.
+/// The alias is intentionally local to this SQLite database; it never makes a checkout-local
+/// identity portable across databases or repositories.
+pub(super) fn resolution_project(
+    connection: &Connection,
+    uri: &str,
+    current_project: &str,
+) -> Result<String, String> {
+    let stored_project = connection
+        .query_row(
+            "SELECT project_id FROM context_refs WHERE uri = ?1
+             UNION ALL
+             SELECT project_id FROM flow_refs WHERE uri = ?1
+             LIMIT 1",
+            params![uri],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Unable to inspect persisted reference project: {error}"))?;
+    let Some(stored_project) = stored_project else {
+        return Ok(current_project.to_string());
+    };
+    if stored_project == current_project {
+        return Ok(current_project.to_string());
+    }
+    let aliased = connection
+        .query_row(
+            "SELECT 1 FROM project_identity_aliases
+             WHERE legacy_project_id = ?1 AND repository_project_id = ?2",
+            params![stored_project, current_project],
+            |_row| Ok(()),
+        )
+        .optional()
+        .map_err(|error| format!("Unable to inspect legacy project identity alias: {error}"))?
+        .is_some();
+    if aliased {
+        Ok(stored_project)
+    } else {
+        Ok(current_project.to_string())
+    }
 }
 
 pub fn list_flows(root: &Path) -> Result<Vec<crate::model::ContextFlow>, String> {
