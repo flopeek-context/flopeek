@@ -68,11 +68,18 @@ pub(super) fn validate_binding(
         limitations.push("repository-identity-mismatch".to_string());
     }
     let revision_available =
-        crate::diagnostic::validate_revision_range(root, &binding.git_revision).is_ok();
+        crate::diagnostic::resolve_last_known_good_revision(root, &binding.git_revision).is_ok();
     if !revision_available {
         limitations.push("git-revision-unavailable".to_string());
     }
-    let first_parent_range_available = revision_available;
+    let first_parent_validation = revision_available
+        .then(|| crate::diagnostic::validate_first_parent_range(root, &binding.git_revision));
+    let first_parent_range_available = first_parent_validation
+        .as_ref()
+        .is_some_and(|result| result.is_ok());
+    if let Some(Err(reason)) = first_parent_validation {
+        limitations.push(reason);
+    }
     let evidence_contract_compatible = if let Some(basis) = binding.graph_basis.as_ref() {
         let row = connection
             .query_row(

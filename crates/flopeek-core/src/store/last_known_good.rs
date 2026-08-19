@@ -3,7 +3,10 @@
 use super::last_known_good_validation::{validate_binding, validate_optional_basis};
 #[allow(unused_imports)]
 use super::*;
-use crate::model::{LAST_KNOWN_GOOD_SCHEMA, LastKnownGoodBinding, LastKnownGoodResolution};
+use crate::model::{
+    LAST_KNOWN_GOOD_SCHEMA, LastKnownGoodBinding, LastKnownGoodResolution,
+    reduce_last_known_good_lifecycle,
+};
 
 const ALLOWED_STATUSES: &[&str] = &["proposed", "confirmed", "rejected", "revoked", "superseded"];
 const ALLOWED_ACTOR_KINDS: &[&str] = &["human", "agent", "tool"];
@@ -56,7 +59,7 @@ pub fn create_last_known_good_binding(
         crate::diagnostic::validate_evidence(evidence)?;
     }
     let resolved_revision =
-        crate::diagnostic::validate_revision_range(root, &binding.git_revision)?;
+        crate::diagnostic::resolve_last_known_good_revision(root, &binding.git_revision)?;
     binding.git_revision = resolved_revision;
     let mut connection = open(root)?;
     let transaction = connection
@@ -102,16 +105,21 @@ pub fn create_last_known_good_binding(
     if binding.created_at == 0 {
         binding.created_at = now_seconds() as u64;
     }
+    let lifecycle = reduce_last_known_good_lifecycle(load_binding_history(
+        &transaction,
+        &binding.context_id,
+        &identity.project_id,
+    )?)?;
+    let expected_predecessor = lifecycle
+        .latest_event
+        .as_ref()
+        .map(|predecessor| predecessor.binding_id.as_str());
     if binding.predecessor_binding_id.is_none() {
-        binding.predecessor_binding_id = transaction
-            .query_row(
-                "SELECT binding_id FROM last_known_good_bindings
-                 WHERE context_id = ?1 ORDER BY created_at DESC, binding_id DESC LIMIT 1",
-                params![binding.context_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| format!("Unable to read last-known-good predecessor: {error}"))?;
+        binding.predecessor_binding_id = expected_predecessor.map(ToOwned::to_owned);
+    } else if binding.predecessor_binding_id.as_deref() != expected_predecessor {
+        return Err(
+            "LastKnownGoodBinding predecessor must be the current lifecycle tip.".to_string(),
+        );
     }
     if let Some(predecessor) = &binding.predecessor_binding_id {
         let same_context = transaction
@@ -185,7 +193,10 @@ pub fn create_last_known_good_binding(
             ],
         )
         .map_err(|error| format!("Unable to persist last-known-good binding: {error}"))?;
-    if binding.status == "confirmed" {
+    if matches!(
+        binding.status.as_str(),
+        "confirmed" | "rejected" | "revoked" | "superseded"
+    ) {
         let context_payload = transaction
             .query_row(
                 "SELECT payload_json FROM diagnostic_contexts WHERE id = ?1",
@@ -195,7 +206,8 @@ pub fn create_last_known_good_binding(
             .map_err(|error| format!("Unable to read Diagnostic Context payload: {error}"))?;
         let mut context = serde_json::from_str::<crate::model::DiagnosticContext>(&context_payload)
             .map_err(|error| format!("Diagnostic Context is corrupted: {error}"))?;
-        context.last_known_good_binding_id = Some(binding.binding_id.clone());
+        context.last_known_good_binding_id =
+            (binding.status == "confirmed").then(|| binding.binding_id.clone());
         context.revision = context.revision.saturating_add(1);
         let updated_payload = serde_json::to_string(&context)
             .map_err(|error| format!("Unable to encode updated Diagnostic Context: {error}"))?;
@@ -204,7 +216,7 @@ pub fn create_last_known_good_binding(
                 "UPDATE diagnostic_contexts SET revision = ?1, payload_json = ?2 WHERE id = ?3",
                 params![context.revision, updated_payload, binding.context_id],
             )
-            .map_err(|error| format!("Unable to bind confirmed last-known-good: {error}"))?;
+            .map_err(|error| format!("Unable to update effective last-known-good: {error}"))?;
     }
     transaction
         .commit()
@@ -236,10 +248,15 @@ pub fn get_last_known_good(
         })
         .transpose()?
         .flatten();
-    let binding =
-        select_latest_binding(&connection, context_id, &project_id, Some("confirmed"))?.or(
-            select_latest_binding(&connection, context_id, &project_id, None)?,
-        );
+    let lifecycle = reduce_last_known_good_lifecycle(load_binding_history(
+        &connection,
+        context_id,
+        &project_id,
+    )?)?;
+    let binding = lifecycle
+        .active_confirmed
+        .clone()
+        .or(lifecycle.latest_event);
     let status = binding
         .as_ref()
         .map(|value| value.status.clone())
@@ -273,24 +290,12 @@ pub fn list_last_known_good_history(
     let connection = open(root)?;
     let project_id = crate::graph::project_id(root);
     ensure_context(&connection, context_id, &project_id)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT payload_json FROM last_known_good_bindings
-             WHERE context_id = ?1 AND project_id = ?2 ORDER BY created_at, binding_id",
-        )
-        .map_err(|error| format!("Unable to prepare last-known-good history: {error}"))?;
-    statement
-        .query_map(params![context_id, project_id], |row| {
-            row.get::<_, String>(0)
-        })
-        .map_err(|error| format!("Unable to query last-known-good history: {error}"))?
-        .map(|row| {
-            let payload =
-                row.map_err(|error| format!("Unable to read last-known-good history: {error}"))?;
-            serde_json::from_str(&payload)
-                .map_err(|error| format!("Last-known-good binding is corrupted: {error}"))
-        })
-        .collect()
+    let lifecycle = reduce_last_known_good_lifecycle(load_binding_history(
+        &connection,
+        context_id,
+        &project_id,
+    )?)?;
+    Ok(lifecycle.history)
 }
 
 pub fn validate_last_known_good(
@@ -315,9 +320,12 @@ pub(crate) fn confirmed_last_known_good(
 ) -> Result<Option<LastKnownGoodBinding>, String> {
     let connection = open(root)?;
     let project_id = crate::graph::project_id(root);
-    let Some(mut binding) =
-        select_latest_binding(&connection, context_id, &project_id, Some("confirmed"))?
-    else {
+    let lifecycle = reduce_last_known_good_lifecycle(load_binding_history(
+        &connection,
+        context_id,
+        &project_id,
+    )?)?;
+    let Some(mut binding) = lifecycle.active_confirmed else {
         return Ok(None);
     };
     let identity = crate::identity::resolve(root)?;
@@ -351,40 +359,29 @@ fn ensure_context(
     Ok(())
 }
 
-fn select_latest_binding(
+fn load_binding_history(
     connection: &Connection,
     context_id: &str,
     project_id: &str,
-    status: Option<&str>,
-) -> Result<Option<LastKnownGoodBinding>, String> {
-    let payload = if let Some(status) = status {
-        connection
-            .query_row(
-                "SELECT payload_json FROM last_known_good_bindings
-                 WHERE context_id = ?1 AND project_id = ?2 AND status = ?3
-                 ORDER BY created_at DESC, binding_id DESC LIMIT 1",
-                params![context_id, project_id, status],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-    } else {
-        connection
-            .query_row(
-                "SELECT payload_json FROM last_known_good_bindings
-                 WHERE context_id = ?1 AND project_id = ?2
-                 ORDER BY created_at DESC, binding_id DESC LIMIT 1",
-                params![context_id, project_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-    }
-    .map_err(|error| format!("Unable to read last-known-good binding: {error}"))?;
-    payload
-        .map(|payload| {
+) -> Result<Vec<LastKnownGoodBinding>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT payload_json FROM last_known_good_bindings
+             WHERE context_id = ?1 AND project_id = ?2",
+        )
+        .map_err(|error| format!("Unable to prepare last-known-good history: {error}"))?;
+    statement
+        .query_map(params![context_id, project_id], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| format!("Unable to query last-known-good history: {error}"))?
+        .map(|row| {
+            let payload =
+                row.map_err(|error| format!("Unable to read last-known-good history: {error}"))?;
             serde_json::from_str(&payload)
                 .map_err(|error| format!("Last-known-good binding is corrupted: {error}"))
         })
-        .transpose()
+        .collect()
 }
 
 fn load_binding(

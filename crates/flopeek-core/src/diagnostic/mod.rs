@@ -78,7 +78,7 @@ use validation::{
 
 pub use continuity::{HistoricalContinuityLimits, get_historical_context_continuity};
 pub use diagnosis::diagnose_history;
-pub(crate) use last_known_good::validate_revision_range;
+pub(crate) use last_known_good::{resolve_last_known_good_revision, validate_first_parent_range};
 pub use packet::build_packet;
 
 pub fn validate_context(context: &DiagnosticContext) -> Result<(), String> {
