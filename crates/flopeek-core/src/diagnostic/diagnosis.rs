@@ -32,31 +32,7 @@ pub fn diagnose_history(
                 status: "applicable".to_string(),
                 limitations: Vec::new(),
             });
-    let confirmed_binding = if let Some(candidate) = protocol_candidate.clone() {
-        Some(crate::model::LastKnownGoodBinding {
-            schema_version: crate::model::LAST_KNOWN_GOOD_SCHEMA.to_string(),
-            binding_id: candidate.candidate_id.clone(),
-            repository_id: candidate.repository_id.clone(),
-            project_id: candidate.project_id.clone(),
-            context_id: candidate.context_id.clone(),
-            git_revision: candidate.git_revision.clone(),
-            observation_id: candidate.observation_id.clone(),
-            event_id: None,
-            graph_basis: candidate.graph_basis.clone(),
-            actor: candidate.proposed_by.clone(),
-            actor_kind: "human".to_string(),
-            evidence: candidate.evidence.clone(),
-            status: "confirmed".to_string(),
-            predecessor_binding_id: None,
-            target_binding_id: None,
-            supersedes_binding_id: None,
-            created_at: candidate.proposed_at,
-            validation: Default::default(),
-        })
-    } else {
-        None
-    };
-    let Some(confirmed_binding) = confirmed_binding.clone() else {
+    let Some(confirmed_candidate) = protocol_candidate.clone() else {
         limitations.push(if context.last_known_good_basis.is_some() {
             "legacy last-known-good basis is legacy-unbound; no historical range was inspected."
                 .to_string()
@@ -87,7 +63,7 @@ pub fn diagnose_history(
     };
 
     let last_known_good = GitBasis {
-        revision: confirmed_binding.git_revision.clone(),
+        revision: confirmed_candidate.git_revision.clone(),
     };
     let last_revision = resolve_revision(root, &last_known_good.revision)?;
     let current_revision = current_head(root)?;
@@ -120,7 +96,7 @@ pub fn diagnose_history(
             last_known_good_basis: Some(GitBasis {
                 revision: last_revision,
             }),
-            last_known_good_binding: Some(confirmed_binding.clone()),
+            last_known_good_binding: None,
             last_known_good_candidate: protocol_candidate.clone(),
             last_known_good_state: protocol_state.clone(),
             last_known_good_applicability: protocol_applicability.clone(),
@@ -145,7 +121,7 @@ pub fn diagnose_history(
             last_known_good_basis: Some(GitBasis {
                 revision: last_revision,
             }),
-            last_known_good_binding: Some(confirmed_binding.clone()),
+            last_known_good_binding: None,
             last_known_good_candidate: protocol_candidate.clone(),
             last_known_good_state: protocol_state.clone(),
             last_known_good_applicability: protocol_applicability.clone(),
@@ -169,7 +145,7 @@ pub fn diagnose_history(
             last_known_good_basis: Some(GitBasis {
                 revision: last_revision,
             }),
-            last_known_good_binding: Some(confirmed_binding.clone()),
+            last_known_good_binding: None,
             last_known_good_candidate: protocol_candidate.clone(),
             last_known_good_state: protocol_state.clone(),
             last_known_good_applicability: protocol_applicability.clone(),
@@ -380,7 +356,7 @@ pub fn diagnose_history(
         last_known_good_basis: Some(GitBasis {
             revision: last_revision,
         }),
-        last_known_good_binding: Some(confirmed_binding),
+        last_known_good_binding: None,
         last_known_good_candidate: protocol_candidate,
         last_known_good_state: protocol_state,
         last_known_good_applicability: protocol_applicability,
