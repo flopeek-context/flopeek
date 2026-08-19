@@ -126,15 +126,9 @@ pub fn node_id(kind: &str, path: &str, name: &str) -> String {
 }
 
 pub fn project_id(root: &Path) -> String {
-    let identity = root
-        .canonicalize()
-        .ok()
-        .and_then(|path| path.to_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| root.to_string_lossy().into_owned());
-    format!(
-        "project_{}",
-        blake3::hash(format!("flopeek-project-v1\0{identity}").as_bytes()).to_hex()
-    )
+    crate::identity::resolve(root)
+        .map(|identity| identity.project_id)
+        .unwrap_or_else(|_| crate::identity::checkout_id(root))
 }
 
 pub fn source_revision(root: &Path) -> String {

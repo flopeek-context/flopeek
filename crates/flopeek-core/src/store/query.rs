@@ -30,6 +30,37 @@ pub fn status(root: &Path) -> Result<StoreStatus, String> {
         )
         .optional()
         .map_err(|error| format!("Unable to read current graph: {error}"))?;
+    let identity_basis = connection
+        .query_row(
+            "SELECT repository_identity_status, repository_identity_id,
+                    repository_manifest_path, repository_manifest_bytes,
+                    repository_manifest_hash
+             FROM graph_observations observation
+             JOIN project_state state ON state.current_observation_id = observation.observation_id
+             WHERE state.project_id = ?1",
+            params![project_id],
+            |row| {
+                let status = row.get::<_, String>(0)?;
+                Ok(crate::identity::IdentityBasis {
+                    schema_version: crate::identity::MANIFEST_SCHEMA.to_string(),
+                    limitations: if status == "available" {
+                        vec!["checkout-identity-is-local-only".to_string()]
+                    } else {
+                        vec![
+                            "repository-identity-manifest-unavailable".to_string(),
+                            "cross-checkout-context-unavailable".to_string(),
+                        ]
+                    },
+                    status,
+                    repository_id: row.get(1)?,
+                    manifest_path: row.get(2)?,
+                    manifest_bytes: row.get::<_, Option<i64>>(3)?.map(|value| value as u64),
+                    manifest_hash: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Unable to read repository identity basis: {error}"))?;
     let graph_count = connection
         .query_row(
             "SELECT COUNT(*) FROM graph_versions WHERE project_id = ?1",
@@ -67,17 +98,65 @@ pub fn status(root: &Path) -> Result<StoreStatus, String> {
         node_count: node_count as u64,
         edge_count: edge_count as u64,
         current_observation_id: current.map(|value| value.2),
+        identity_basis,
     })
 }
 
 pub fn resolve_context(root: &Path, uri: &str) -> Result<ContextRef, String> {
     let connection = open(root)?;
-    context::resolve(&connection, uri, &crate::graph::project_id(root))
+    let current_project = crate::graph::project_id(root);
+    let resolution_project = resolution_project(&connection, uri, &current_project)?;
+    context::resolve(&connection, uri, &resolution_project)
 }
 
 pub fn resolve_flow(root: &Path, uri: &str) -> Result<crate::model::FlowRef, String> {
     let connection = open(root)?;
-    flow_ref::resolve(&connection, uri, &crate::graph::project_id(root))
+    let current_project = crate::graph::project_id(root);
+    let resolution_project = resolution_project(&connection, uri, &current_project)?;
+    flow_ref::resolve(&connection, uri, &resolution_project)
+}
+
+/// Resolve a persisted reference against its original checkout-local project only when
+/// the v9 identity alias explicitly binds that project to the current repository identity.
+/// The alias is intentionally local to this SQLite database; it never makes a checkout-local
+/// identity portable across databases or repositories.
+pub(super) fn resolution_project(
+    connection: &Connection,
+    uri: &str,
+    current_project: &str,
+) -> Result<String, String> {
+    let stored_project = connection
+        .query_row(
+            "SELECT project_id FROM context_refs WHERE uri = ?1
+             UNION ALL
+             SELECT project_id FROM flow_refs WHERE uri = ?1
+             LIMIT 1",
+            params![uri],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Unable to inspect persisted reference project: {error}"))?;
+    let Some(stored_project) = stored_project else {
+        return Ok(current_project.to_string());
+    };
+    if stored_project == current_project {
+        return Ok(current_project.to_string());
+    }
+    let aliased = connection
+        .query_row(
+            "SELECT 1 FROM project_identity_aliases
+             WHERE legacy_project_id = ?1 AND repository_project_id = ?2",
+            params![stored_project, current_project],
+            |_row| Ok(()),
+        )
+        .optional()
+        .map_err(|error| format!("Unable to inspect legacy project identity alias: {error}"))?
+        .is_some();
+    if aliased {
+        Ok(stored_project)
+    } else {
+        Ok(current_project.to_string())
+    }
 }
 
 pub fn list_flows(root: &Path) -> Result<Vec<crate::model::ContextFlow>, String> {
@@ -141,6 +220,11 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         entry_manifest_fingerprint,
         entry_effective_fingerprint,
         entry_manifest_json,
+        identity_status,
+        identity_repository_id,
+        identity_manifest_path,
+        identity_manifest_bytes,
+        identity_manifest_hash,
         truncated,
         omissions_json,
     )) = connection
@@ -158,6 +242,11 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
                      observation.entry_manifest_fingerprint,
                      observation.entry_effective_fingerprint,
                      observation.entry_manifest_json,
+                     observation.repository_identity_status,
+                     observation.repository_identity_id,
+                     observation.repository_manifest_path,
+                     observation.repository_manifest_bytes,
+                     observation.repository_manifest_hash,
                      graph.truncated, graph.omissions_json
              FROM project_state state
              JOIN graph_observations observation ON observation.observation_id = state.current_observation_id
@@ -180,8 +269,13 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
                     row.get::<_, String>(11)?,
                     row.get::<_, String>(12)?,
                     row.get::<_, String>(13)?,
-                    row.get::<_, i64>(14)?,
-                    row.get::<_, String>(15)?,
+                    row.get::<_, String>(14)?,
+                    row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<i64>>(17)?,
+                    row.get::<_, Option<String>>(18)?,
+                    row.get::<_, i64>(19)?,
+                    row.get::<_, String>(20)?,
                 ))
             },
         )
@@ -215,6 +309,22 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         facts.push(fact);
     }
     let mut files = crate::store::observation::decode_source_manifest(&source_manifest_json)?;
+    let identity_basis = crate::identity::IdentityBasis {
+        schema_version: crate::identity::MANIFEST_SCHEMA.to_string(),
+        status: identity_status.clone(),
+        repository_id: identity_repository_id,
+        manifest_path: identity_manifest_path,
+        manifest_bytes: identity_manifest_bytes.map(|value| value as u64),
+        manifest_hash: identity_manifest_hash,
+        limitations: if identity_status == "available" {
+            vec!["checkout-identity-is-local-only".to_string()]
+        } else {
+            vec![
+                "repository-identity-manifest-unavailable".to_string(),
+                "cross-checkout-context-unavailable".to_string(),
+            ]
+        },
+    };
     let mut nodes = connection
         .prepare(
             "SELECT node_id, kind, path, name, language, evidence_fingerprint FROM graph_nodes
@@ -393,6 +503,7 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         source_revision,
         source_fingerprint,
         observation_id,
+        identity_basis,
         files,
         nodes,
         edges,

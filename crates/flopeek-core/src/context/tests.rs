@@ -18,6 +18,7 @@ fn context_uri_is_deterministic_and_explicitly_branded() {
         source_revision: "unavailable".to_string(),
         source_fingerprint: String::new(),
         observation_id: String::new(),
+        identity_basis: crate::identity::IdentityBasis::default(),
         files: Vec::new(),
         nodes: Vec::new(),
         edges: Vec::new(),

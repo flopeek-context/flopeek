@@ -8,6 +8,7 @@ pub mod flow;
 pub mod flow_ref;
 pub mod graph;
 pub mod history_store;
+pub mod identity;
 pub mod model;
 pub mod module_resolution;
 pub mod protocol;
@@ -19,8 +20,8 @@ pub mod typescript;
 mod architecture_contract_tests {
     #[test]
     fn public_core_contract_paths_remain_stable() {
-        assert_eq!(crate::model::GRAPH_SCHEMA, "flopeek-graph/v6");
-        assert_eq!(crate::model::PROTOCOL_SCHEMA, "flopeek-protocol/v9");
+        assert_eq!(crate::model::GRAPH_SCHEMA, "flopeek-graph/v7");
+        assert_eq!(crate::model::PROTOCOL_SCHEMA, "flopeek-protocol/v10");
         let _: fn(&std::path::Path) -> Result<crate::model::ScanResult, String> =
             crate::protocol::scan_project;
         let _: fn(&std::path::Path, &str) -> Result<crate::model::ContextRef, String> =
@@ -35,7 +36,7 @@ mod architecture_contract_tests {
         );
         assert_eq!(
             crate::graph::GRAPH_DERIVATION_ID,
-            "typescript-structural-evidence-v6"
+            "typescript-structural-evidence-v7"
         );
         assert_eq!(
             crate::flow::flow_id("project", "script", "start"),
@@ -49,7 +50,7 @@ mod architecture_contract_tests {
         assert!(crate::flow::flow_id("project", "script", "start").starts_with("flow_"));
         assert_eq!(
             crate::graph::GRAPH_DERIVATION_ID,
-            "typescript-structural-evidence-v6"
+            "typescript-structural-evidence-v7"
         );
         assert_eq!(
             crate::module_resolution::MODULE_RESOLUTION_SCHEMA,
@@ -59,16 +60,16 @@ mod architecture_contract_tests {
 
     #[test]
     fn persistence_and_diagnostic_contract_paths_remain_stable() {
-        assert_eq!(crate::store::CURRENT_USER_VERSION, 8);
-        assert_eq!(crate::model::CONTEXT_REF_SCHEMA, "flopeek-context-ref/v3");
-        assert_eq!(crate::model::FLOW_REF_SCHEMA, "flopeek-flow-ref/v1");
+        assert_eq!(crate::store::CURRENT_USER_VERSION, 9);
+        assert_eq!(crate::model::CONTEXT_REF_SCHEMA, "flopeek-context-ref/v4");
+        assert_eq!(crate::model::FLOW_REF_SCHEMA, "flopeek-flow-ref/v2");
         assert_eq!(
             crate::model::DIAGNOSTIC_PACKET_SCHEMA,
-            "flopeek-diagnostic-packet/v4"
+            "flopeek-diagnostic-packet/v5"
         );
         assert_eq!(
             crate::model::HISTORICAL_SNAPSHOT_SCHEMA,
-            "flopeek-historical-snapshot/v6"
+            "flopeek-historical-snapshot/v7"
         );
         let _: fn(&std::path::Path) -> Result<crate::model::ScanResult, String> =
             crate::protocol::scan_project;
@@ -80,15 +81,15 @@ mod architecture_contract_tests {
     fn temporal_contract_identity_is_deterministic() {
         assert_eq!(
             crate::model::OBSERVATION_CONTINUITY_SCHEMA,
-            "flopeek-observation-continuity/v1"
+            "flopeek-observation-continuity/v2"
         );
         assert_eq!(
             crate::model::CONTEXT_RECONCILIATION_SCHEMA,
-            "flopeek-context-reconciliation/v1"
+            "flopeek-context-reconciliation/v2"
         );
         assert_eq!(
             crate::model::OBSERVATION_DELTA_SCHEMA,
-            "flopeek-observation-delta/v1"
+            "flopeek-observation-delta/v2"
         );
         assert_eq!(
             crate::temporal::observation_event_id("project", None, "observation"),
