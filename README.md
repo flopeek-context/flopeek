@@ -37,6 +37,16 @@ because the Git revision, whitespace, comments, or raw byte hash changed. Each
 source state is retained as an immutable graph observation with its exact
 source fingerprint and Git revision.
 
+Portable repository identity is opt-in and explicit. A tracked root
+`.flopeek-repository.json` using `flopeek-repository-identity/v1` supplies a
+stable `repo_<uuid>` identity; the scanner only reads it. With a valid
+manifest, `projectId` and new Context Refs are repository-scoped across
+checkouts. Without one, Flopeek remains usable in explicit `checkout-local`
+mode and reports cross-checkout context as unavailable. Legacy checkout-local
+refs are retained through same-database aliases and are never silently treated
+as portable. Checkout paths and manifest bodies are not persisted in portable
+evidence.
+
 Context Refs use node-level freshness. A reference is `current` when its
 canonical AST/evidence fingerprint and sorted direct-edge signatures still
 match; focused symbol, rename/removal, and direct import/call changes resolve

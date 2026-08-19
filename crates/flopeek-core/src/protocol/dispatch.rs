@@ -65,6 +65,10 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             "contextReconciliation": "exact-compatible-fingerprint-candidates",
             "automaticSupersession": "disabled-without-lineage-proof",
             "structuralChangeAttribution": "adjacent-observation-compatible-evidence",
+            "repositoryIdentity": "explicit-versioned-root-manifest",
+            "checkoutIdentity": "canonical-path-local-only",
+            "legacyProjectIdentity": "local-alias-only",
+            "crossCheckoutContext": "repository-identity-required",
         })),
         "scan" => {
             let root = project_root(params)?;

@@ -4,6 +4,7 @@ use super::{
     ContextFlow, EntryEvidence, FlowRef, GraphBasis, ModuleResolutionBasis, RelatedTestEvidence,
     ResolutionEvidence, SourceFile,
 };
+use crate::identity::IdentityBasis;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +39,8 @@ pub struct GraphSnapshot {
     pub source_fingerprint: String,
     #[serde(default)]
     pub observation_id: String,
+    #[serde(default)]
+    pub identity_basis: IdentityBasis,
     pub files: Vec<SourceFile>,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
@@ -98,6 +101,8 @@ pub struct StoreStatus {
     pub edge_count: u64,
     #[serde(default)]
     pub current_observation_id: Option<String>,
+    #[serde(default)]
+    pub identity_basis: Option<crate::identity::IdentityBasis>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,6 +111,8 @@ pub struct ScanResult {
     pub product: String,
     pub project_id: String,
     pub graph: GraphSnapshot,
+    #[serde(default)]
+    pub identity_basis: IdentityBasis,
     pub context_refs: Vec<ContextRef>,
     #[serde(default)]
     pub flow_refs: Vec<FlowRef>,

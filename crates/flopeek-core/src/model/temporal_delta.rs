@@ -3,7 +3,7 @@
 use super::{GraphBasis, GraphEdge, GraphNode};
 use serde::{Deserialize, Serialize};
 
-pub const OBSERVATION_DELTA_SCHEMA: &str = "flopeek-observation-delta/v1";
+pub const OBSERVATION_DELTA_SCHEMA: &str = "flopeek-observation-delta/v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

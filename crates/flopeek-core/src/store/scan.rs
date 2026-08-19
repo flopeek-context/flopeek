@@ -8,6 +8,7 @@ pub fn persist_scan(
     mut snapshot: GraphSnapshot,
     facts: &[TypeScriptFacts],
 ) -> Result<ScanResult, String> {
+    let identity = crate::identity::resolve(root)?;
     let mut connection = open(root)?;
     let transaction = connection
         .transaction()
@@ -19,6 +20,47 @@ pub fn persist_scan(
             params![PRODUCT_IDENTITY],
         )
         .map_err(|error| format!("Unable to record product identity: {error}"))?;
+    let previous_project = transaction
+        .query_row(
+            "SELECT value FROM product_metadata WHERE key = 'project_id'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Unable to read previous project identity: {error}"))?;
+    if let Some(previous_project) = previous_project
+        .filter(|previous| previous != &snapshot.project_id)
+        .filter(|_| identity.repository_id.is_some())
+    {
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO project_identity_aliases(
+                    legacy_project_id, repository_project_id, checkout_id_hash, alias_kind, created_at
+                 ) VALUES(?1, ?2, ?3, 'legacy-checkout-local', ?4)",
+                params![
+                    previous_project,
+                    snapshot.project_id,
+                    identity.checkout_id,
+                    now_seconds()
+                ],
+            )
+            .map_err(|error| format!("Unable to persist legacy project identity alias: {error}"))?;
+    }
+    if let (Some(repository_id), Some(manifest_path), Some(manifest_bytes), Some(manifest_hash)) = (
+        identity.repository_id.as_deref(),
+        identity.basis.manifest_path.as_deref(),
+        identity.basis.manifest_bytes,
+        identity.basis.manifest_hash.as_deref(),
+    ) {
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO repository_identities(
+                    repository_id, manifest_path, manifest_bytes, manifest_hash, created_at
+                 ) VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![repository_id, manifest_path, manifest_bytes as i64, manifest_hash, now_seconds()],
+            )
+            .map_err(|error| format!("Unable to persist repository identity provenance: {error}"))?;
+    }
     transaction
         .execute(
             "INSERT INTO product_metadata(key, value) VALUES('project_id', ?1)
@@ -170,8 +212,12 @@ pub fn persist_scan(
                 module_resolution_status, module_resolution_fingerprint,
                 module_resolution_effective_fingerprint, module_resolution_manifest_json,
                 entry_manifest_status, entry_manifest_fingerprint,
-                entry_effective_fingerprint, entry_manifest_json, observed_at
-             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                entry_effective_fingerprint, entry_manifest_json, observed_at,
+                repository_identity_status, repository_identity_id,
+                repository_manifest_path, repository_manifest_bytes,
+                repository_manifest_hash, checkout_id_hash
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                      ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 observation,
                 snapshot.project_id,
@@ -189,7 +235,13 @@ pub fn persist_scan(
                 snapshot.entry_evidence.effective_fingerprint,
                 serde_json::to_string(&snapshot.entry_evidence.manifest)
                     .map_err(|error| format!("Unable to encode entry manifest: {error}"))?,
-                now_seconds()
+                now_seconds(),
+                snapshot.identity_basis.status,
+                snapshot.identity_basis.repository_id,
+                snapshot.identity_basis.manifest_path,
+                snapshot.identity_basis.manifest_bytes.map(|value| value as i64),
+                snapshot.identity_basis.manifest_hash,
+                identity.checkout_id
             ],
         )
         .map_err(|error| format!("Unable to persist graph observation: {error}"))?;
@@ -261,6 +313,7 @@ pub fn persist_scan(
         product: PRODUCT_IDENTITY.to_string(),
         project_id: snapshot.project_id.clone(),
         graph: snapshot,
+        identity_basis: identity.basis,
         context_refs: refs,
         flow_refs,
         limitations: {

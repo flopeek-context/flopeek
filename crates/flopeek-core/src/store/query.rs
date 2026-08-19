@@ -30,6 +30,37 @@ pub fn status(root: &Path) -> Result<StoreStatus, String> {
         )
         .optional()
         .map_err(|error| format!("Unable to read current graph: {error}"))?;
+    let identity_basis = connection
+        .query_row(
+            "SELECT repository_identity_status, repository_identity_id,
+                    repository_manifest_path, repository_manifest_bytes,
+                    repository_manifest_hash
+             FROM graph_observations observation
+             JOIN project_state state ON state.current_observation_id = observation.observation_id
+             WHERE state.project_id = ?1",
+            params![project_id],
+            |row| {
+                let status = row.get::<_, String>(0)?;
+                Ok(crate::identity::IdentityBasis {
+                    schema_version: crate::identity::MANIFEST_SCHEMA.to_string(),
+                    limitations: if status == "available" {
+                        vec!["checkout-identity-is-local-only".to_string()]
+                    } else {
+                        vec![
+                            "repository-identity-manifest-unavailable".to_string(),
+                            "cross-checkout-context-unavailable".to_string(),
+                        ]
+                    },
+                    status,
+                    repository_id: row.get(1)?,
+                    manifest_path: row.get(2)?,
+                    manifest_bytes: row.get::<_, Option<i64>>(3)?.map(|value| value as u64),
+                    manifest_hash: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Unable to read repository identity basis: {error}"))?;
     let graph_count = connection
         .query_row(
             "SELECT COUNT(*) FROM graph_versions WHERE project_id = ?1",
@@ -67,6 +98,7 @@ pub fn status(root: &Path) -> Result<StoreStatus, String> {
         node_count: node_count as u64,
         edge_count: edge_count as u64,
         current_observation_id: current.map(|value| value.2),
+        identity_basis,
     })
 }
 
@@ -141,6 +173,11 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         entry_manifest_fingerprint,
         entry_effective_fingerprint,
         entry_manifest_json,
+        identity_status,
+        identity_repository_id,
+        identity_manifest_path,
+        identity_manifest_bytes,
+        identity_manifest_hash,
         truncated,
         omissions_json,
     )) = connection
@@ -158,6 +195,11 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
                      observation.entry_manifest_fingerprint,
                      observation.entry_effective_fingerprint,
                      observation.entry_manifest_json,
+                     observation.repository_identity_status,
+                     observation.repository_identity_id,
+                     observation.repository_manifest_path,
+                     observation.repository_manifest_bytes,
+                     observation.repository_manifest_hash,
                      graph.truncated, graph.omissions_json
              FROM project_state state
              JOIN graph_observations observation ON observation.observation_id = state.current_observation_id
@@ -180,8 +222,13 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
                     row.get::<_, String>(11)?,
                     row.get::<_, String>(12)?,
                     row.get::<_, String>(13)?,
-                    row.get::<_, i64>(14)?,
-                    row.get::<_, String>(15)?,
+                    row.get::<_, String>(14)?,
+                    row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<i64>>(17)?,
+                    row.get::<_, Option<String>>(18)?,
+                    row.get::<_, i64>(19)?,
+                    row.get::<_, String>(20)?,
                 ))
             },
         )
@@ -215,6 +262,22 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         facts.push(fact);
     }
     let mut files = crate::store::observation::decode_source_manifest(&source_manifest_json)?;
+    let identity_basis = crate::identity::IdentityBasis {
+        schema_version: crate::identity::MANIFEST_SCHEMA.to_string(),
+        status: identity_status.clone(),
+        repository_id: identity_repository_id,
+        manifest_path: identity_manifest_path,
+        manifest_bytes: identity_manifest_bytes.map(|value| value as u64),
+        manifest_hash: identity_manifest_hash,
+        limitations: if identity_status == "available" {
+            vec!["checkout-identity-is-local-only".to_string()]
+        } else {
+            vec![
+                "repository-identity-manifest-unavailable".to_string(),
+                "cross-checkout-context-unavailable".to_string(),
+            ]
+        },
+    };
     let mut nodes = connection
         .prepare(
             "SELECT node_id, kind, path, name, language, evidence_fingerprint FROM graph_nodes
@@ -393,6 +456,7 @@ pub fn current_graph(root: &Path) -> Result<Option<GraphSnapshot>, String> {
         source_revision,
         source_fingerprint,
         observation_id,
+        identity_basis,
         files,
         nodes,
         edges,

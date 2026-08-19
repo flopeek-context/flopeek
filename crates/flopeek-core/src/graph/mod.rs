@@ -21,7 +21,7 @@ pub const MAX_GRAPH_NODES: usize = 50_000;
 pub const MAX_GRAPH_EDGES: usize = 100_000;
 pub const MAX_RESOLUTION_RECORDS: usize = 100_000;
 pub const MAX_REEXPORT_DEPTH: usize = 32;
-pub const GRAPH_DERIVATION_ID: &str = "typescript-structural-evidence-v6";
+pub const GRAPH_DERIVATION_ID: &str = "typescript-structural-evidence-v7";
 
 mod builder;
 mod call_resolution;

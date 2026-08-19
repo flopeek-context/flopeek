@@ -23,7 +23,7 @@ use std::process::Command;
 const MAX_ID_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_LIST_ITEMS: usize = 256;
-const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v6";
+const HISTORY_DERIVATION_ID: &str = "typescript-historical-delta-v7";
 
 const ALLOWED_INTENTS: &[&str] = &["diagnose", "audit", "verify-fix"];
 const ALLOWED_CONTEXT_STATUSES: &[&str] = &["open", "reconciled", "resolved", "superseded"];

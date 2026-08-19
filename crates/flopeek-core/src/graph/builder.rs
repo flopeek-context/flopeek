@@ -3,6 +3,7 @@
 use super::*;
 
 pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), String> {
+    let identity = crate::identity::resolve(root)?;
     let module_resolver = ModuleResolver::load(root);
     let mut files = discover(root)?;
     let mut truncated = false;
@@ -286,7 +287,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
         omissions.extend(module_resolver.basis.limitations.clone());
     }
     assign_node_fingerprints(&mut nodes, &edges, &facts);
-    let project_id = project_id(root);
+    let project_id = identity.project_id.clone();
     let flow_seed = flow::derive(root, &project_id, &files, &nodes, &edges)?;
     nodes.extend(flow_seed.entry_nodes);
     edges.extend(flow_seed.entry_edges);
@@ -326,7 +327,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
         .iter()
         .map(|file| (&file.path, &file.language))
         .collect::<Vec<_>>();
-    let identity = GraphIdentity {
+    let graph_identity = GraphIdentity {
         project_id: &project_id,
         derivation_id: GRAPH_DERIVATION_ID,
         files: &identity_files,
@@ -339,7 +340,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
         related_test_evidence: &related_test_evidence,
         flows: &flows,
     };
-    let graph_id = blake3::hash(&serde_json::to_vec(&identity).map_err(|error| error.to_string())?)
+    let graph_id = blake3::hash(&serde_json::to_vec(&graph_identity).map_err(|error| error.to_string())?)
         .to_hex()
         .to_string();
     let module_resolution = module_resolver.basis.clone();
@@ -353,6 +354,7 @@ pub fn build(root: &Path) -> Result<(GraphSnapshot, Vec<TypeScriptFacts>), Strin
             source_revision,
             source_fingerprint,
             observation_id: String::new(),
+            identity_basis: identity.basis,
             files,
             nodes,
             edges,
