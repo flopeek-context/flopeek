@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_DIRECTORY: &str = ".flopeek";
 pub const STORE_FILENAME: &str = "flopeek.sqlite3";
-pub const CURRENT_USER_VERSION: i64 = 10;
+pub const CURRENT_USER_VERSION: i64 = 11;
 
 mod change;
 mod continuity;

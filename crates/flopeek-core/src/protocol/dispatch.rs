@@ -71,6 +71,9 @@ fn handle_method(method: &str, params: &Value) -> Result<Value, String> {
             "crossCheckoutContext": "repository-identity-required",
             "historicalContextContinuity": "adjacent-first-parent-static-evidence",
             "lastKnownGood": "attributed-human-confirmation",
+            "lastKnownGoodLifecycle": "targeted-append-only-state-machine",
+            "lastKnownGoodProvenance": "revision-observation-graph-consistent",
+            "humanActorIdentity": "caller-attributed-not-authenticated",
         })),
         "scan" => {
             let root = project_root(params)?;

@@ -140,14 +140,20 @@ claiming causality.
 Last-known-good is explicit engineering evidence. The JSONL methods
 `createLastKnownGoodBinding`, `getLastKnownGood`, `listLastKnownGoodHistory`, and
 `validateLastKnownGood` persist an append-only binding per Diagnostic Context.
-Agents and tools may propose one. Confirmation, rejection, revocation, and
-supersession require caller-attributed `actorKind = human`; this is attribution,
-not authenticated identity. Flopeek reduces the predecessor-linked lifecycle, so
-a revoked, rejected, or superseded confirmation is no longer active. A confirmed
-revision is usable for diagnosis only when it is on the current HEAD first-parent
-lineage. Legacy `lastKnownGoodBasis` remains readable as `legacy-unbound` and is
-not used for new historical diagnosis. Flopeek never infers last-known-good from
-tests, commit messages, graph similarity, or candidate ranking.
+Version 2 uses targeted lifecycle fields: `predecessorBindingId` is append order,
+`targetBindingId` points at the proposal or active binding being acted on, and
+`supersedesBindingId` is present only on a replacement confirmation. Only one
+proposal may be pending; rejecting it preserves the active confirmation,
+revoking the active binding clears it, and replacement confirmation must target
+both the pending proposal and the active binding. Legacy `superseded` events are
+read-only and cannot be written. Confirmation, rejection, and revocation require
+caller-attributed `actorKind = human`; this is attribution, not authenticated
+identity. If a graph basis is supplied, its project, revision, graph, graph
+version, observation, and event must agree; mismatches are retained as invalid
+evidence and never used for diagnosis. A confirmed revision is usable only when
+it is on the current HEAD first-parent lineage and provenance-consistent. Legacy
+`lastKnownGoodBasis` remains readable as `legacy-unbound`. Flopeek never infers
+last-known-good from tests, commits, graph similarity, or candidate ranking.
 
 Adjacent local observations also expose `getObservationDelta`. The response
 compares only the direct predecessor event and records bounded source-path,

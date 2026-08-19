@@ -109,6 +109,18 @@ fn jsonl_health_is_rust_only_and_deterministic() {
         response["result"]["lastKnownGood"],
         "attributed-human-confirmation"
     );
+    assert_eq!(
+        response["result"]["lastKnownGoodLifecycle"],
+        "targeted-append-only-state-machine"
+    );
+    assert_eq!(
+        response["result"]["lastKnownGoodProvenance"],
+        "revision-observation-graph-consistent"
+    );
+    assert_eq!(
+        response["result"]["humanActorIdentity"],
+        "caller-attributed-not-authenticated"
+    );
 }
 
 #[test]
@@ -177,7 +189,7 @@ fn last_known_good_jsonl_methods_round_trip_with_human_confirmation() {
     );
     assert_eq!(created["ok"], true);
     let binding = json!({
-        "schemaVersion": "flopeek-last-known-good/v1",
+        "schemaVersion": "flopeek-last-known-good/v2",
         "bindingId": "jsonl-lkg-binding",
         "repositoryId": "repo_123e4567-e89b-12d3-a456-426614174000",
         "projectId": scan["result"]["project_id"],
@@ -191,7 +203,8 @@ fn last_known_good_jsonl_methods_round_trip_with_human_confirmation() {
         "evidence": [],
         "status": "confirmed",
         "predecessorBindingId": null,
-        "supersededBindingId": null,
+        "targetBindingId": null,
+        "supersedesBindingId": null,
         "createdAt": 0,
         "validation": {}
     });
