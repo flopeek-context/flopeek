@@ -36,6 +36,13 @@ All flow paths are static traversals over proven parser edges. The fixture does
 not claim command invocation, execution order, runtime behavior, or business
 intent.
 
+The P2 maturity matrix additionally covers repository-scoped identity across
+two checkouts, checkout-local legacy aliases, immutable observation continuity,
+adjacent first-parent deltas, exact-fingerprint lineage candidates without
+automatic supersession, and append-only last-known-good bindings requiring
+human confirmation. Identity-transition, dirty-history, incompatible-contract,
+and unavailable-evidence cases remain explicit rather than being inferred.
+
 Rust source and tests are the verification authority for this fixture. The
 repository gate is `cargo fmt --all --check`, locked Clippy, locked workspace
 tests, product-contract validation, and the clean-fixture JSONL smoke surface.

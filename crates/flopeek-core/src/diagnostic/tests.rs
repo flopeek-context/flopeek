@@ -623,6 +623,29 @@ fn missing_last_known_good_is_explicit_and_packet_is_bounded() {
 }
 
 #[test]
+fn legacy_last_known_good_basis_is_reported_unbound_and_not_used_for_diagnosis() {
+    let root = fixture_root();
+    fs::write(root.join("src/main.ts"), "export const main = 1;\n").expect("source");
+    commit(&root, "source");
+    let (context, _) = context_for(&root);
+    let context = store::create_diagnostic_context(&root, context).expect("context");
+    let diagnosis =
+        diagnose_history(&root, &context.id, DiagnosticLimits::default()).expect("diagnosis");
+    assert_eq!(diagnosis.last_known_good_status, "legacy-unbound");
+    assert!(diagnosis.last_known_good_binding.is_none());
+    assert!(diagnosis.candidates.is_empty());
+    assert!(
+        diagnosis
+            .limitations
+            .iter()
+            .any(|limitation| limitation.contains("legacy-unbound"))
+    );
+    let resolution = store::get_last_known_good(&root, &context.id).expect("resolution");
+    assert_eq!(resolution.status, "legacy-unbound");
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
 fn corrupted_diagnostic_metadata_is_reported_without_silent_recovery() {
     let root = fixture_root();
     fs::write(root.join("src/main.ts"), "export const main = 1;\n").expect("source");

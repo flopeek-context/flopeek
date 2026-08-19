@@ -173,5 +173,6 @@ mod flow;
 mod graph_behavior;
 mod last_known_good;
 mod legacy;
+mod maturity;
 mod migration;
 mod temporal;
