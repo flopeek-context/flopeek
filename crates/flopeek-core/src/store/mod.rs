@@ -25,6 +25,7 @@ mod change;
 mod continuity;
 mod graph_validation;
 mod last_known_good;
+mod last_known_good_validation;
 mod memory;
 mod migrations;
 mod observation;

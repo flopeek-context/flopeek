@@ -4,7 +4,11 @@ use super::*;
 use crate::model::{
     GraphEdge, GraphNode, HISTORICAL_CONTEXT_CONTINUITY_SCHEMA, HistoricalContextContinuity,
     HistoricalContinuityCounts, HistoricalEdgeChange, HistoricalFlowChange, HistoricalNodeChange,
-    HistoricalPathChange, HistoricalSnapshot, ObservationBasisRelations,
+    HistoricalSnapshot,
+};
+use continuity_evidence::{
+    bound_path_lineage, bound_paths, path_changes, path_lineage_candidates,
+    snapshot_basis_relations, unavailable_basis_relations,
 };
 
 const MAX_CONTINUITY_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
@@ -43,6 +47,7 @@ pub fn get_historical_context_continuity(
             "historical-continuity-unavailable-for-dirty-source",
         ));
     }
+    let current_identity = crate::identity::resolve(root)?;
     let to = to_revision
         .map(|revision| resolve_revision(root, revision))
         .transpose()?
@@ -73,6 +78,32 @@ pub fn get_historical_context_continuity(
             uri,
             "unavailable",
             "historical-snapshot-project-mismatch",
+        ));
+    }
+    let Some(repository_id) = current_identity.repository_id.as_deref() else {
+        return Ok(unavailable(
+            graph.project_id,
+            uri,
+            "unavailable",
+            "historical-repository-identity-unavailable",
+        ));
+    };
+    if before.repository_identity_id.is_none() || after.repository_identity_id.is_none() {
+        return Ok(unavailable(
+            graph.project_id,
+            uri,
+            "unavailable",
+            "legacy-repository-identity-unavailable",
+        ));
+    }
+    if before.repository_identity_id.as_deref() != Some(repository_id)
+        || after.repository_identity_id.as_deref() != Some(repository_id)
+    {
+        return Ok(unavailable(
+            graph.project_id,
+            uri,
+            "unavailable",
+            "historical-repository-identity-mismatch",
         ));
     }
     let Some(before_contract) = before.evidence_contract.as_ref() else {
@@ -114,8 +145,16 @@ pub fn get_historical_context_continuity(
 
     let path_changes_all = path_changes(&before, &after);
     let path_total = path_changes_all.len();
+    let path_lineage_all = path_lineage_candidates(&path_changes_all);
+    let path_lineage_total = path_lineage_all.len();
     let path_changes = bound_paths(
         path_changes_all,
+        limits.max_paths,
+        &mut truncated,
+        &mut omissions,
+    );
+    let path_lineage_candidates = bound_path_lineage(
+        path_lineage_all,
         limits.max_paths,
         &mut truncated,
         &mut omissions,
@@ -196,12 +235,14 @@ pub fn get_historical_context_continuity(
         node_status,
         fingerprint_relation,
         path_changes,
+        path_lineage_candidates,
         node_changes,
         edge_changes,
         flow_changes,
         lineage_candidates,
         counts: HistoricalContinuityCounts {
             path_changes: path_total,
+            path_lineage_candidates: path_lineage_total,
             node_changes: node_total,
             edge_changes: edge_total,
             flow_changes: flow_total,
@@ -238,6 +279,7 @@ fn unavailable(
         node_status: "unavailable".to_string(),
         fingerprint_relation: "unavailable".to_string(),
         path_changes: Vec::new(),
+        path_lineage_candidates: Vec::new(),
         node_changes: Vec::new(),
         edge_changes: Vec::new(),
         flow_changes: Vec::new(),
@@ -246,53 +288,6 @@ fn unavailable(
         truncated: false,
         omissions: Vec::new(),
         limitations: vec![reason.to_string()],
-    }
-}
-
-fn snapshot_basis_relations(
-    before: &HistoricalSnapshot,
-    after: &HistoricalSnapshot,
-) -> ObservationBasisRelations {
-    let source_before = crate::graph::exact_source_fingerprint(&before.files).unwrap_or_default();
-    let source_after = crate::graph::exact_source_fingerprint(&after.files).unwrap_or_default();
-    ObservationBasisRelations {
-        typescript_source: fingerprint_relation(&source_before, &source_after),
-        module_resolution_exact: fingerprint_relation(
-            &before.module_resolution.exact_fingerprint,
-            &after.module_resolution.exact_fingerprint,
-        ),
-        module_resolution_effective: fingerprint_relation(
-            &before.module_resolution.effective_fingerprint,
-            &after.module_resolution.effective_fingerprint,
-        ),
-        entry_manifest_exact: fingerprint_relation(
-            &before.entry_evidence.exact_fingerprint,
-            &after.entry_evidence.exact_fingerprint,
-        ),
-        entry_manifest_effective: fingerprint_relation(
-            &before.entry_evidence.effective_fingerprint,
-            &after.entry_evidence.effective_fingerprint,
-        ),
-    }
-}
-
-fn fingerprint_relation(before: &str, after: &str) -> String {
-    if before.is_empty() || after.is_empty() {
-        "unavailable".to_string()
-    } else if before == after {
-        "same".to_string()
-    } else {
-        "changed".to_string()
-    }
-}
-
-fn unavailable_basis_relations() -> ObservationBasisRelations {
-    ObservationBasisRelations {
-        typescript_source: "unavailable".to_string(),
-        module_resolution_exact: "unavailable".to_string(),
-        module_resolution_effective: "unavailable".to_string(),
-        entry_manifest_exact: "unavailable".to_string(),
-        entry_manifest_effective: "unavailable".to_string(),
     }
 }
 
@@ -326,45 +321,6 @@ fn snapshot_basis(snapshot: &HistoricalSnapshot) -> GraphBasis {
         source_revision: snapshot.source_revision.clone(),
         observation_id: String::new(),
     }
-}
-
-fn path_changes(
-    before: &HistoricalSnapshot,
-    after: &HistoricalSnapshot,
-) -> Vec<HistoricalPathChange> {
-    let before = before
-        .files
-        .iter()
-        .map(|file| (file.path.clone(), file.hash.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let after = after
-        .files
-        .iter()
-        .map(|file| (file.path.clone(), file.hash.clone()))
-        .collect::<BTreeMap<_, _>>();
-    before
-        .keys()
-        .chain(after.keys())
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .filter_map(|path| {
-            let before_hash = before.get(&path).cloned();
-            let after_hash = after.get(&path).cloned();
-            let status = match (&before_hash, &after_hash) {
-                (None, Some(_)) => "added",
-                (Some(_), None) => "removed",
-                (Some(left), Some(right)) if left != right => "changed",
-                _ => return None,
-            };
-            Some(HistoricalPathChange {
-                path,
-                status: status.to_string(),
-                before_hash,
-                after_hash,
-            })
-        })
-        .collect()
 }
 
 fn focused_node_changes(
@@ -496,20 +452,6 @@ fn focused_flow_changes(
             })
         })
         .collect()
-}
-
-fn bound_paths(
-    mut values: Vec<HistoricalPathChange>,
-    limit: usize,
-    truncated: &mut bool,
-    omissions: &mut Vec<String>,
-) -> Vec<HistoricalPathChange> {
-    if values.len() > limit {
-        values.truncate(limit);
-        *truncated = true;
-        omissions.push(format!("historical path changes capped at {limit}"));
-    }
-    values
 }
 
 fn bound_nodes(

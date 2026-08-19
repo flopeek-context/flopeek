@@ -161,6 +161,8 @@ pub struct HistoricalSnapshot {
     pub project_id: String,
     pub source_revision: String,
     #[serde(default)]
+    pub repository_identity_id: Option<String>,
+    #[serde(default)]
     pub evidence_contract: Option<EvidenceContract>,
     pub files: Vec<SourceFile>,
     pub nodes: Vec<GraphNode>,

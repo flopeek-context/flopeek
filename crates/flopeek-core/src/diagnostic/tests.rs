@@ -195,6 +195,86 @@ fn historical_context_continuity_compares_adjacent_first_parent_without_superses
     fs::remove_dir_all(root).expect("cleanup");
 }
 
+#[test]
+fn historical_continuity_reports_path_fingerprint_lineage_without_successor() {
+    let root = fixture_root();
+    fs::write(root.join("src/old.ts"), "export const value = 1;\n").expect("old source");
+    let first = commit(&root, "A: source path");
+    let (snapshot, facts) = graph::build(&root).expect("build A");
+    let first_scan = store::persist_scan(&root, snapshot, &facts).expect("persist A");
+    let old_ref = first_scan
+        .context_refs
+        .iter()
+        .find(|reference| {
+            first_scan.graph.nodes.iter().any(|node| {
+                node.id == reference.node_id && node.path.as_deref() == Some("src/old.ts")
+            })
+        })
+        .cloned()
+        .expect("old source ref");
+
+    fs::remove_file(root.join("src/old.ts")).expect("remove old source");
+    fs::write(root.join("src/new.ts"), "export const value = 1;\n").expect("new source");
+    let second = commit(&root, "B: move source path");
+    let (snapshot, facts) = graph::build(&root).expect("build B");
+    store::persist_scan(&root, snapshot, &facts).expect("persist B");
+
+    let continuity = get_historical_context_continuity(
+        &root,
+        &old_ref.uri,
+        Some(&first),
+        Some(&second),
+        HistoricalContinuityLimits {
+            max_paths: 256,
+            max_nodes: 512,
+            max_edges: 1_024,
+            max_flows: 128,
+        },
+    )
+    .expect("continuity");
+    assert_eq!(continuity.status, "stale");
+    assert!(
+        continuity
+            .path_lineage_candidates
+            .iter()
+            .any(|candidate| candidate.contains("src/old.ts->src/new.ts"))
+    );
+    assert!(continuity.lineage_candidates.is_empty());
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn historical_identity_transition_is_unavailable_without_repository_manifest() {
+    let root = fixture_root();
+    fs::write(root.join("src/main.ts"), "export const main = 1;\n").expect("main A");
+    let first = commit(&root, "A: repository identity");
+    fs::remove_file(root.join(crate::identity::MANIFEST_PATH)).expect("remove manifest");
+    fs::write(root.join("src/main.ts"), "export const main = 2;\n").expect("main B");
+    let second = commit(&root, "B: identity transition");
+    let (snapshot, facts) = graph::build(&root).expect("build B");
+    let result = store::persist_scan(&root, snapshot, &facts).expect("persist B");
+    let reference = result.context_refs.first().expect("context ref");
+    let continuity = get_historical_context_continuity(
+        &root,
+        &reference.uri,
+        Some(&first),
+        Some(&second),
+        HistoricalContinuityLimits {
+            max_paths: 256,
+            max_nodes: 512,
+            max_edges: 1_024,
+            max_flows: 128,
+        },
+    )
+    .expect("identity transition response");
+    assert_eq!(continuity.status, "unavailable");
+    assert_eq!(
+        continuity.reason,
+        "historical-repository-identity-unavailable"
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
 fn copy_fixture_tree(source: &Path, destination: &Path) {
     for entry in fs::read_dir(source).expect("fixture directory") {
         let entry = entry.expect("fixture entry");
@@ -619,6 +699,29 @@ fn missing_last_known_good_is_explicit_and_packet_is_bounded() {
             .iter()
             .any(|reference| reference.status == "stale")
     );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn legacy_last_known_good_basis_is_reported_unbound_and_not_used_for_diagnosis() {
+    let root = fixture_root();
+    fs::write(root.join("src/main.ts"), "export const main = 1;\n").expect("source");
+    commit(&root, "source");
+    let (context, _) = context_for(&root);
+    let context = store::create_diagnostic_context(&root, context).expect("context");
+    let diagnosis =
+        diagnose_history(&root, &context.id, DiagnosticLimits::default()).expect("diagnosis");
+    assert_eq!(diagnosis.last_known_good_status, "legacy-unbound");
+    assert!(diagnosis.last_known_good_binding.is_none());
+    assert!(diagnosis.candidates.is_empty());
+    assert!(
+        diagnosis
+            .limitations
+            .iter()
+            .any(|limitation| limitation.contains("legacy-unbound"))
+    );
+    let resolution = store::get_last_known_good(&root, &context.id).expect("resolution");
+    assert_eq!(resolution.status, "legacy-unbound");
     fs::remove_dir_all(root).expect("cleanup");
 }
 

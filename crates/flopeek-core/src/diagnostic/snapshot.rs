@@ -61,10 +61,11 @@ pub(super) fn build_historical_snapshot(
     let mut truncated = false;
     let mut omissions = Vec::new();
     let mut included = 0_usize;
-    for path in paths
-        .iter()
-        .filter(|path| is_typescript_path(path) || *path == "package.json")
-    {
+    for path in paths.iter().filter(|path| {
+        is_typescript_path(path)
+            || *path == "package.json"
+            || *path == crate::identity::MANIFEST_PATH
+    }) {
         if included >= limits.max_paths {
             truncated = true;
             omissions.push(format!(
@@ -150,9 +151,12 @@ pub(super) fn build_historical_snapshot(
         total_bytes += bytes.len();
         config_bytes += bytes.len();
     }
+    let historical_identity = crate::identity::resolve(&temporary)
+        .map_err(|error| format!("historical-repository-identity-invalid: {error}"));
     let built = crate::graph::build(&temporary);
     let _ = fs::remove_dir_all(&temporary);
     let (mut graph_snapshot, _) = built?;
+    let historical_identity = historical_identity?;
     graph_snapshot.project_id = crate::graph::project_id(root);
     for flow in &mut graph_snapshot.flows {
         flow.flow_id = crate::flow::flow_id(
@@ -170,6 +174,7 @@ pub(super) fn build_historical_snapshot(
         schema_version: HISTORICAL_SNAPSHOT_SCHEMA.to_string(),
         project_id: graph_snapshot.project_id,
         source_revision: revision.to_string(),
+        repository_identity_id: historical_identity.repository_id,
         evidence_contract: Some(crate::model::EvidenceContract {
             graph_schema_version: crate::model::GRAPH_SCHEMA.to_string(),
             graph_derivation_id: crate::graph::GRAPH_DERIVATION_ID.to_string(),

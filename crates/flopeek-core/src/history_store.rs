@@ -194,6 +194,7 @@ mod tests {
             schema_version: HISTORICAL_SNAPSHOT_SCHEMA.to_string(),
             project_id: crate::graph::project_id(&root),
             source_revision: "a".repeat(40),
+            repository_identity_id: None,
             evidence_contract: Some(crate::model::EvidenceContract {
                 graph_schema_version: crate::model::GRAPH_SCHEMA.to_string(),
                 graph_derivation_id: crate::graph::GRAPH_DERIVATION_ID.to_string(),
